@@ -1,0 +1,22 @@
+format_version = 1
+
+[[package]]
+id = "megaman-x.enhancement.password-save"
+version = "1.0.0"
+
+[[package]]
+id = "megaman-x.enhancement.widescreen"
+version = "1.0.0"
+
+[[feature]]
+package_id = "megaman-x.enhancement.password-save"
+id = "password_save"
+enabled = true
+
+[[feature]]
+package_id = "megaman-x.enhancement.widescreen"
+id = "widescreen"
+enabled = true
+
+[feature.values]
+aspect = "16:9"

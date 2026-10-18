@@ -1,0 +1,161 @@
+diff --git a/runner/runner.cmake b/runner/runner.cmake
+index a95cc69..6de57e0 100644
+--- a/runner/runner.cmake
++++ b/runner/runner.cmake
+@@ -1222,7 +1222,8 @@ function(snesrecomp_target_desktop_host target)
+     else()
+         snesrecomp_target_post_mortem(${target})
+     endif()
+-    if(NOT ANDROID)
++    # snesrecomp-ps4: consoles present through SDL_Renderer (GLES2) only.
++    if(NOT ANDROID AND NOT PS4)
+         snesrecomp_target_opengl(${target})
+     endif()
+     # Run-ahead and rewind are the host's (snes_runahead.c, snes_rewind.c,
+diff --git a/runner/src/desktop/fiber_compat.c b/runner/src/desktop/fiber_compat.c
+index d1f6893..5b3ef8f 100644
+--- a/runner/src/desktop/fiber_compat.c
++++ b/runner/src/desktop/fiber_compat.c
+@@ -135,7 +135,13 @@ int    FiberSnapshotLoad(void *fiber, const void *in, size_t size) {
+ #include <stdint.h>
+ #include <stdlib.h>
+ #include <string.h>
++#if defined(SRPS4)
++/* snesrecomp-ps4: PS4's musl declares no usable ucontext; the port supplies a
++ * minimal x86-64 getcontext/makecontext/swapcontext with the same contract. */
++#include "srps4_ucontext.h"
++#else
+ #include <ucontext.h>
++#endif
+ 
+ typedef struct Fiber {
+     ucontext_t ctx;
+diff --git a/runner/src/desktop/host_main.c b/runner/src/desktop/host_main.c
+index 3bc3905..1aaf264 100644
+--- a/runner/src/desktop/host_main.c
++++ b/runner/src/desktop/host_main.c
+@@ -164,7 +164,14 @@ static void HandleInput(int keyCode, int keyMod, bool pressed);
+ static void HandleCommand(uint32 j, bool pressed);
+ static void PollKeyboardControls(const uint8_t *keys);
+ static void RequestScreenshot(void);
+-#ifndef __ANDROID__
++/* Hosts without the desktop-GL presenter: Android (GLES via SDL_Renderer)
++ * and consoles (snesrecomp-ps4: Piglet GLES2 via SDL_Renderer). */
++#if defined(__ANDROID__) || (defined(SRPS4) && SRPS4_CONSOLE)
++#define SNESRECOMP_NO_GL_PRESENTER 1
++#else
++#define SNESRECOMP_NO_GL_PRESENTER 0
++#endif
++#if !SNESRECOMP_NO_GL_PRESENTER
+ void OpenGLRenderer_Create(struct RendererFuncs *funcs);
+ #include "opengl.h"   /* snesrecomp_opengl_set_vsync */
+ #endif
+@@ -512,7 +519,7 @@ static void RendererEnumerate(void) {
+   snprintf(g_renderer_id[0], kRendererNameMax, "auto");
+   snprintf(g_renderer_label[0], kRendererNameMax, "Auto");
+   g_renderer_count = 1;
+-#ifndef __ANDROID__
++#if !SNESRECOMP_NO_GL_PRESENTER
+   snprintf(g_renderer_id[1], kRendererNameMax, "opengl");
+   snprintf(g_renderer_label[1], kRendererNameMax, "OpenGL");
+   g_renderer_count = 2;
+@@ -2856,7 +2863,7 @@ static void ApplyLiveSettings(const Config *before) {
+       g_current_window_scale = IntMin(g_config.window_scale, kMaxWindowScale);
+     ChangeWindowScale(0);
+   }
+-#ifndef __ANDROID__
++#if !SNESRECOMP_NO_GL_PRESENTER
+   snesrecomp_opengl_set_vsync(VSyncInterval());
+ #endif
+   if (g_renderer_funcs.Reconfigure) g_renderer_funcs.Reconfigure();
+@@ -3052,7 +3059,7 @@ int snesrecomp_desktop_main(const SnesDesktopHostGame *game, int argc, char **ar
+   g_simulation_hz = game->simulation_hz > 0 ? game->simulation_hz : SNES_HOST_NTSC_HZ;
+   g_snes_width = game->frame_width > 0 ? game->frame_width : 256;
+   g_snes_height = game->frame_height > 0 ? game->frame_height : 224;
+-#ifndef __ANDROID__
++#if !SNESRECOMP_NO_GL_PRESENTER
+   snesrecomp_opengl_set_viewport(game->compute_viewport);
+ #endif
+   const char *build_version = game->build_version ? game->build_version : "dev";
+@@ -3503,7 +3510,7 @@ int snesrecomp_desktop_main(const SnesDesktopHostGame *game, int argc, char **ar
+       g_current_window_scale * WindowBaseHeight();
+ 
+   RendererApply(RendererChoice());
+-#ifndef __ANDROID__
++#if !SNESRECOMP_NO_GL_PRESENTER
+   if (g_config.output_method == kOutputMethod_OpenGL) {
+     g_win_flags |= SDL_WINDOW_OPENGL;
+     snesrecomp_opengl_set_vsync(VSyncInterval());
+@@ -3629,6 +3636,21 @@ error_reading:;
+   if (!g_renderer_funcs.Initialize(window)) {
+     host_report_breadcrumb("renderer init FAILED (output_method=%d)",
+                            g_config.output_method);
++#if defined(SRPS4) && SRPS4_CONSOLE
++    /* A console has no other presenter to offer and no launcher to fix the
++     * config from: if the accelerated (Piglet/GLES2) renderer cannot come
++     * up, degrade to SDL's software renderer instead of exiting. */
++    if (g_config.output_method != kOutputMethod_SDLSoftware) {
++      g_config.output_method = kOutputMethod_SDLSoftware;
++      g_renderer_funcs = kSdlRendererFuncs;
++      if (!g_renderer_funcs.Initialize(window)) {
++        host_report_breadcrumb("software renderer fallback FAILED: %s",
++                               SDL_GetError());
++        return 1;
++      }
++      host_report_breadcrumb("fell back to the software renderer");
++    } else
++#endif
+     return 1;
+   }
+   host_report_breadcrumb("renderer initialized: %s",
+@@ -4539,7 +4561,7 @@ static void RequestScreenshot(void) {
+     return;
+   s_last_screenshot_time = now;
+ 
+-#ifdef __ANDROID__
++#if SNESRECOMP_NO_GL_PRESENTER
+   fprintf(stderr, "Screenshots require the desktop OpenGL backend.\n");
+ #else
+   if (g_config.output_method != kOutputMethod_OpenGL) {
+diff --git a/runner/src/host_paths.c b/runner/src/host_paths.c
+index 216a8ff..bc67835 100644
+--- a/runner/src/host_paths.c
++++ b/runner/src/host_paths.c
+@@ -29,8 +29,17 @@
+ /* Full path of the running executable. Returns 1 on success. Platforms
+  * without a query mechanism (e.g. Switch homebrew) return 0 and callers
+  * fall back to cwd-relative behavior. */
++#if defined(SRPS4)
++const char *srps4_data_dir(void);
++#endif
++
+ static int get_exe_path(char *out, size_t max_len) {
+-#if defined(_WIN32)
++#if defined(SRPS4)
++    /* snesrecomp-ps4: the package mount is read-only; the port's writable
++     * per-title data directory stands in for "beside the executable". */
++    int n = snprintf(out, max_len, "%s/eboot.bin", srps4_data_dir());
++    return (n > 0 && (size_t)n < max_len) ? 1 : 0;
++#elif defined(_WIN32)
+     DWORD n = GetModuleFileNameA(NULL, out, (DWORD)max_len);
+     return (n > 0 && n < max_len) ? 1 : 0;
+ #elif defined(__APPLE__)
+diff --git a/runner/src/render_workers.c b/runner/src/render_workers.c
+index bd34fbf..87887cc 100644
+--- a/runner/src/render_workers.c
++++ b/runner/src/render_workers.c
+@@ -36,7 +36,14 @@ static void condition_wake(WorkerCondition *c) { pthread_cond_signal(c); }
+ static void condition_wake_all(WorkerCondition *c) { pthread_cond_broadcast(c); }
+ static void condition_destroy(WorkerCondition *c) { pthread_cond_destroy(c); }
+ static void thread_join(WorkerThread t) { pthread_join(t, NULL); }
++#if defined(SRPS4) && SRPS4_CONSOLE
++/* snesrecomp-ps4: libkernel's sysconf() follows FreeBSD's _SC_* numbering, not
++ * musl's, so the query fails. A game process owns six of the eight Jaguar
++ * cores; the caller plus up to three workers stays inside that budget. */
++static unsigned available_cpus(void) { return 6; }
++#else
+ static unsigned available_cpus(void) { long n = sysconf(_SC_NPROCESSORS_ONLN); return n > 0 ? (unsigned)n : 1; }
++#endif
+ #define WORKER_ENTRY void *
+ #define WORKER_RETURN NULL
+ #endif

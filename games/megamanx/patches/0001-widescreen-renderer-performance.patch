@@ -1,0 +1,355 @@
+diff --git a/src/mmx_render_assets.c b/src/mmx_render_assets.c
+index 97e4ca5..bfe807b 100644
+--- a/src/mmx_render_assets.c
++++ b/src/mmx_render_assets.c
+@@ -754,26 +754,28 @@ static size_t background_list(size_t base, unsigned phase) {
+   if (end < start || phase >= (end - start) / 2) return rom_size;
+   return base + word(base + start + phase * 2);
+ }
++static void prepare_background_chr(unsigned phase) {
++  if (bg_chr_ready[phase]) return;
++  bg_chr_ready[phase] = true;
++  memset(bg_chr_valid[phase], 0, sizeof(bg_chr_valid[phase]));
++  size_t p = background_list(0x321d5, phase);
++  /* B436's nine-byte DMA records: byte count, VRAM word destination,
++   * ROM long source, palette descriptor. BG data is uncompressed. */
++  for (unsigned guard = 0; guard < 32 && range(p, 9) && word(p); ++guard, p += 9) {
++    unsigned count = word(p), dest = word(p + 2) * 2;
++    size_t source = lorom(word(p + 4) | (rom[p + 6] << 16));
++    if ((dest & 31) || (count & 31) || dest + count > 65536 || !range(source, count)) continue;
++    memcpy(bg_chr[phase] + dest, rom + source, count);
++    memset(bg_chr_valid[phase] + dest / 32, 1, count / 32);
++  }
++}
+ const uint8_t *MmxRenderAssetsBackgroundTile(const uint8_t ram[0x20000],
+                                             int world_x, unsigned vram_word) {
+   if (!ram || (ram[0x1f7a] != 0 && ram[0x1f7a] != 1) || world_x < 0 || world_x >= 8192 || vram_word >= 0x8000 || !prepare_background(ram)) return NULL;
+   unsigned phase = bg_phase[0][world_x];
+   /* RAM records the requested phase before DMA completes. Use private
+    * resources even when it matches, so margin art cannot briefly regress. */
+-  if (!bg_chr_ready[phase]) {
+-    bg_chr_ready[phase] = true;
+-    memset(bg_chr_valid[phase], 0, sizeof(bg_chr_valid[phase]));
+-    size_t p = background_list(0x321d5, phase);
+-    /* B436's nine-byte DMA records: byte count, VRAM word destination,
+-     * ROM long source, palette descriptor. BG data is uncompressed. */
+-    for (unsigned guard = 0; guard < 32 && range(p, 9) && word(p); ++guard, p += 9) {
+-      unsigned count = word(p), dest = word(p + 2) * 2;
+-      size_t source = lorom(word(p + 4) | (rom[p + 6] << 16));
+-      if ((dest & 31) || (count & 31) || dest + count > 65536 || !range(source, count)) continue;
+-      memcpy(bg_chr[phase] + dest, rom + source, count);
+-      memset(bg_chr_valid[phase] + dest / 32, 1, count / 32);
+-    }
+-  }
++  prepare_background_chr(phase);
+   return bg_chr_valid[phase][vram_word / 16] ? bg_chr[phase] + vram_word * 2 : NULL;
+ }
+ static const MmxBackgroundPalette *background_palette(unsigned phase) {
+@@ -823,6 +825,18 @@ const MmxBackgroundPalette *MmxRenderAssetsBackgroundPalette(const uint8_t ram[0
+ const MmxBackgroundPalette *MmxRenderAssetsBackgroundPalettePhase(const uint8_t ram[0x20000], unsigned phase) {
+   return ram && phase < 16 && prepare_background(ram) ? background_palette(phase) : NULL;
+ }
++/* Build every lazily-filled background resource for this stage up front.
++ * The results are pure functions of the ROM and stage, so filling them early
++ * changes nothing; afterwards the per-pixel lookups above only read, which
++ * lets the renderer's composition pass run on several threads. */
++void MmxRenderAssetsPrepareConcurrentReads(const uint8_t ram[0x20000], bool rush_ceiling_needed) {
++  if (rush_ceiling_needed) (void)MmxRenderAssetsRushCeilingPixel(0, 0);
++  if (!ram || !prepare_background(ram)) return;
++  for (unsigned phase = 0; phase < 16; ++phase) {
++    if (bg_stage == 0 || bg_stage == 1) prepare_background_chr(phase);
++    (void)background_palette(phase);
++  }
++}
+ uint16_t MmxRenderAssetsFadeColor(uint16_t color, unsigned amount) {
+   unsigned result = 0;
+   for (unsigned shift = 0; shift < 15; shift += 5) {
+diff --git a/src/mmx_render_assets.h b/src/mmx_render_assets.h
+index a7db476..2ab14e6 100644
+--- a/src/mmx_render_assets.h
++++ b/src/mmx_render_assets.h
+@@ -15,6 +15,9 @@ void MmxRenderAssetsPreloadRush(void);
+ /* Penguin's original 64x24 ceiling mount, decoded from his room's BG1.
+  * -1 is transparent; bit 16 retains native BG priority, low 15 bits BGR555. */
+ int MmxRenderAssetsRushCeilingPixel(unsigned x,unsigned y);
++/* Fill all lazily-built background caches for the current stage (and the
++ * Boss Rush ceiling) so concurrent readers never race their initialization. */
++void MmxRenderAssetsPrepareConcurrentReads(const uint8_t ram[0x20000], bool rush_ceiling_needed);
+ const MmxSpriteAsset *MmxRenderAssetsSprite(unsigned stage, unsigned section, unsigned sprite);
+ /* Explicit ROM resource binding for presentation-only dormant actor art. */
+ const MmxSpriteAsset *MmxRenderAssetsResource(unsigned stage, unsigned section, unsigned resource);
+diff --git a/src/mmx_renderer.c b/src/mmx_renderer.c
+index 59dcfdf..215132b 100644
+--- a/src/mmx_renderer.c
++++ b/src/mmx_renderer.c
+@@ -924,18 +924,23 @@ bool MmxRendererStageTile(const uint8_t ram[0x20000], unsigned layer,
+ static bool door_body(int x, int y) {
+   if (x < 0 || y < 0 || x >= 8192 || y >= 8192) return false;
+   unsigned key = (y >> 4) * 512 + (x >> 4);
+-  if (door_cache[key]) return door_cache[key] == 2;
+-  door_cache[key] = 1;
++  /* Memo shared by composition workers: 0 = unknown, 1 = no, 2 = door. The
++   * answer is a pure function of this frame's map, so racing workers at most
++   * compute it twice; publish only the final value. */
++  uint8_t known = __atomic_load_n(&door_cache[key], __ATOMIC_RELAXED);
++  if (known) return known == 2;
+   x &= ~15; y &= ~15;
+-  for (int row = 0; row < 3; ++row) {
++  bool door = false;
++  for (int row = 0; row < 3 && !door; ++row) {
+     uint16_t entries[3][4];
+     bool valid = true;
+     for (int r = 0; r < 3; ++r) for (int q = 0; q < 4; ++q)
+       valid &= MmxRendererStageTile(frame.ram, 0, x + (q & 1) * 8,
+                                      y + (r - row) * 16 + (q >> 1) * 8, &entries[r][q]);
+-    if (valid && MmxWidePolicy_IsBossDoorBody(entries, row)) { door_cache[key] = 2; return true; }
++    if (valid && MmxWidePolicy_IsBossDoorBody(entries, row)) door = true;
+   }
+-  return false;
++  __atomic_store_n(&door_cache[key], (uint8_t)(door ? 2 : 1), __ATOMIC_RELAXED);
++  return door;
+ }
+ static unsigned tile_pixel(const uint16_t *vram, unsigned address, int x, int y, unsigned bpp) {
+   unsigned a = (address + y) & 0x7fff, shift = 7 - x;
+@@ -1897,6 +1902,97 @@ static void rush_native_text(uint32_t *out,MmxRenderView view,int x,int y,const
+     }
+   }
+ }
++/* ---- Composition pass (snesrecomp-ps4) ----------------------------------
++ * Per row, the renderer first fills an object buffer (sprites, overlays: an
++ * order-dependent serial pass), then composes each pixel from the BG layers,
++ * that buffer, windows and color math. Composition reads only immutable
++ * per-frame state, the row's own buffers and caches made read-only by
++ * MmxRenderAssetsPrepareConcurrentReads(), and writes only its own output
++ * row, so rows are independent and can be split across render workers.
++ * With no worker pool it runs exactly as before, row by row. */
++static uint16_t row_objects[224][MMX_RENDER_MAX_WIDTH];
++static int row_object_colors[224][MMX_RENDER_MAX_WIDTH];
++static bool row_compose[224];
++typedef struct ComposeContext {
++  uint32_t *out; MmxRenderView view; bool stage, menu;
++  unsigned beam_count; const LightBeam *beams; unsigned palette_fade;
++  const int16_t *crystal_ripple;
++} ComposeContext;
++static void compose_row(const ComposeContext *c, int y) {
++  uint32_t *out = c->out; const MmxRenderView view = c->view;
++  const bool stage = c->stage, menu = c->menu;
++  const unsigned beam_count = c->beam_count, palette_fade = c->palette_fade;
++  const LightBeam *beams = c->beams; const int16_t *crystal_ripple = c->crystal_ripple;
++  const Raster *r = &frame.lines[y]; Ppu p;
++  memcpy(&p, r->registers, PPU_SAVESTATE_REGS_SIZE);
++  if (beam_count) p.cgwsel = (p.cgwsel & 0xcf) | 0x20;
++  uint16_t *objects = row_objects[y];
++  int *object_colors = row_object_colors[y];
++  uint8_t brightness[32];
++  for (int k = 0; k < 32; ++k) brightness[k] = (uint8_t)(((k << 3) | (k >> 2)) * (p.inidisp & 15) / 15);
++  /* Dialogue masks BG1/BG2 for the panel and subtracts white from the
++   * exposed backdrop ($81:915E). That global subtraction also blacks out
++   * Storm's transparent sky between clouds in the newly exposed margins.
++   * Recognize the captured panel setup across stages; preserve its native
++   * window/text and every other color effect, including transition fades. */
++  bool dialogue_backdrop = g_mmx_render_asset_repairs && p.cgadsub == 0xa0 &&
++      p.cgwsel == 0x80 && p.fixedColor == 0x7fff && p.windowsel == 0x22 &&
++      p.screenWindowed[0] == 3 && (p.screenEnabled[0] & 7) == 7;
++    for (int sx = 0; sx < view.width; ++sx) {
++      int x = sx - view.extra;
++      if (menu && (x < 0 || x >= 256)) { out[y * view.width + sx] = 0; continue; }
++      uint16_t screens[2] = {0x500, 0x500}, bg[3] = {0};
++      int bg_colors[3] = {-1, -1, -1};
++      for (int layer = 0; layer < 3; ++layer) if ((p.screenEnabled[0] | p.screenEnabled[1]) & (1 << layer)) {
++        int bx = x, by = y + 1;
++        if (stage && layer==0) by+=crystal_ripple[y];
++        if (p.mosaic & (1 << layer)) { int size = (p.mosaic >> 4) + 1;
++          bx -= ((bx % size) + size) % size; by -= by % size; }
++        bg[layer] = background(&p, r, layer, bx, by, stage, &bg_colors[layer]);
++      }
++      if (palette_fade) {
++        for (int layer = 0; layer < 3; ++layer) if (bg_colors[layer] >= 0)
++          bg_colors[layer] = MmxRenderAssetsFadeColor((uint16_t)bg_colors[layer], palette_fade);
++        if (object_colors[sx] >= 0)
++          object_colors[sx] = MmxRenderAssetsFadeColor((uint16_t)object_colors[sx], palette_fade)|(object_colors[sx]&0x8000);
++      }
++      uint16_t camouflage_bg=0x500;
++      for (int sub = 0; sub < 2; ++sub) {
++        for (int layer = 0; layer < 3; ++layer)
++          if ((p.screenEnabled[sub] & (1 << layer)) &&
++              (!(p.screenWindowed[sub] & (1 << layer)) || !window(&p, layer, x, view.extra)) && bg[layer] > screens[sub]) screens[sub] = bg[layer];
++        if(!sub) camouflage_bg=screens[0];
++        if ((p.screenEnabled[sub] & 16) && (!(p.screenWindowed[sub] & 16) || !window(&p, 4, x, view.extra)) &&
++            objects[sx] > screens[sub]) screens[sub] = objects[sx];
++      }
++      bool color_window = window(&p, 5, x, view.extra);
++      if (beam_count) {
++        color_window = false;
++        for (unsigned i = 0; i < beam_count; ++i)
++          color_window |= x >= beams[i].left[y] && x <= beams[i].right[y];
++      }
++      out[y * view.width + sx] = colour(&p, r->palette, brightness, screens[0], screens[1], color_window, object_colors[sx], bg_colors,
++                                       dialogue_backdrop && (x < 0 || x >= 256),camouflage_bg);
++    }
++}
++#if MMX_RENDER_PARALLEL
++#include "render_workers.h"
++static SnesRenderWorkers *compose_pool;
++static bool compose_pool_tried;
++static void compose_range(void *context, size_t begin, size_t end, unsigned slot) {
++  (void)slot;
++  for (size_t y = begin; y < end; ++y)
++    if (row_compose[y]) compose_row((const ComposeContext *)context, (int)y);
++}
++#endif
++static void compose_rows(const ComposeContext *c) {
++#if MMX_RENDER_PARALLEL
++  if (!compose_pool_tried) { compose_pool_tried = true; compose_pool = SnesRenderWorkersCreate(0); }
++  if (compose_pool && SnesRenderWorkersRun(compose_pool, 224, 8, compose_range, (void *)c)) return;
++#endif
++  for (int y = 0; y < 224; ++y) if (row_compose[y]) compose_row(c, y);
++}
++
+ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
+   if (!out || !frame.valid || view.width < 256 || view.width > MMX_RENDER_MAX_WIDTH ||
+       view.extra != (view.width - 256) / 2 || (view.width & 1)) return false;
+@@ -2065,6 +2161,20 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
+   if (frame_coop.initialized && MmxWeaponsTimePhase(&frame_coop.players[frame_coop.current^1].combat)==1 &&
+       MmxWeaponsTimePhase(&frame_weapon_combat)!=1)
+     MmxWeaponsTimeRipple(&frame_coop.players[frame_coop.current^1].combat,crystal_ripple);
++  /* Matching each piece against OAM slots 16..127 depends only on this
++   * frame's piece list and the row's OAM snapshot, and consecutive rows
++   * nearly always share one snapshot. Memoize the result per snapshot: the
++   * slot scan ran pieces x 112 x 224 times a frame and dominated this
++   * function on slow CPUs (snesrecomp-ps4). Output is unchanged. */
++  static bool oam_memo_match[MAX_PIECES];
++  bool oam_memo_replaced[128];
++  const Raster *oam_memo_raster = NULL;
++  memset(row_compose, 0, sizeof(row_compose));
++  /* Fill every lazily-built background resource now, while still serial, so
++   * the composition pass only ever reads shared caches. */
++  if (stage || menu || zero_title || frame_rush.menu)
++    MmxRenderAssetsPrepareConcurrentReads(frame.ram, frame_rush.mode==MMX_RUSH_PLAYING ||
++        frame_rush.mode==MMX_RUSH_PREPARING);
+   for (int y = 0; y < 224; ++y) {
+     const Raster *r = &frame.lines[y]; Ppu p;
+     memcpy(&p, r->registers, PPU_SAVESTATE_REGS_SIZE);
+@@ -2075,19 +2185,14 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
+     }
+     ++stats.custom_lines;
+     if (p.inidisp & 128) continue;
+-    uint8_t brightness[32];
+-    for (int c = 0; c < 32; ++c) brightness[c] = (uint8_t)(((c << 3) | (c >> 2)) * (p.inidisp & 15) / 15);
+-    /* Dialogue masks BG1/BG2 for the panel and subtracts white from the
+-     * exposed backdrop ($81:915E). That global subtraction also blacks out
+-     * Storm's transparent sky between clouds in the newly exposed margins.
+-     * Recognize the captured panel setup across stages; preserve its native
+-     * window/text and every other color effect, including transition fades. */
+-    bool dialogue_backdrop = g_mmx_render_asset_repairs && p.cgadsub == 0xa0 &&
+-        p.cgwsel == 0x80 && p.fixedColor == 0x7fff && p.windowsel == 0x22 &&
+-        p.screenWindowed[0] == 3 && (p.screenEnabled[0] & 7) == 7;
+-    uint16_t objects[MMX_RENDER_MAX_WIDTH] = {0};
+-    int object_colors[MMX_RENDER_MAX_WIDTH];
++    /* The sprite pass below fills this row's object buffers serially (it is
++     * order-dependent); the per-pixel composition runs afterwards in
++     * compose_rows(), possibly in parallel. */
++    uint16_t *objects = row_objects[y];
++    int *object_colors = row_object_colors[y];
++    memset(objects, 0, (size_t)view.width * sizeof(*objects));
+     for (int x = 0; x < view.width; ++x) object_colors[x] = -1;
++    row_compose[y] = true;
+     for (int i = (int)storm_count - 1; i >= 0; --i) {
+       Piece s = storm[i];
+       const MmxSpriteAsset *asset = s.animation == 0x38 ? storm_heart : storm_platform;
+@@ -2102,6 +2207,10 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
+       sprite(&p, r, s.x, s.y, s.attr, s.size, y, view, objects, true, asset, s.tile, object_colors, true, false, false);
+     }
+     bool replaced[128] = {false};
++    const bool oam_memo_hit = oam_memo_raster &&
++        !memcmp(r->oam, oam_memo_raster->oam, sizeof(r->oam)) &&
++        !memcmp(r->high_oam, oam_memo_raster->high_oam, sizeof(r->high_oam));
++    if (oam_memo_hit) memcpy(replaced, oam_memo_replaced, sizeof(replaced));
+     bool zero_drawn[2] = {false,false};
+     for (int i = (int)piece_count - 1; i >= 0; --i) {
+       Piece s = pieces[i]; const MmxSpriteAsset *asset = piece_assets[i];
+@@ -2133,12 +2242,20 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
+       bool zero_armor = zero && (s.object == 0xc38 || s.object == 0xc58 || s.object == 0xc78 ||
+           (zero_menu && (s.object == 0x1928 || s.object == 0x1948 || s.object == 0x1968)));
+       bool oam_match = false;
+-      if (g_mmx_render_asset_repairs || coop_buster || zero_body || zero_armor || zero_charge || swap_actor || red_ready || red_death || triad_x_body || triad_armor || frozen_enemy) for (int slot = 16; slot < 128; ++slot) {
+-        unsigned pos = r->oam[slot * 2], hi = r->high_oam[slot / 4] >> (slot % 4 * 2);
+-        int ox = (pos & 255) | ((hi & 1) << 8); if (ox >= 256) ox -= 512;
+-        if (ox == s.x && (pos >> 8) == ((unsigned)s.y & 255) && r->oam[slot * 2 + 1] == s.attr) {
+-          oam_match = true;
+-          replaced[slot] = true; center = true;
++      if (g_mmx_render_asset_repairs || coop_buster || zero_body || zero_armor || zero_charge || swap_actor || red_ready || red_death || triad_x_body || triad_armor || frozen_enemy) {
++        if (oam_memo_hit) {
++          oam_match = oam_memo_match[i];
++          if (oam_match) center = true;
++        } else {
++          for (int slot = 16; slot < 128; ++slot) {
++            unsigned pos = r->oam[slot * 2], hi = r->high_oam[slot / 4] >> (slot % 4 * 2);
++            int ox = (pos & 255) | ((hi & 1) << 8); if (ox >= 256) ox -= 512;
++            if (ox == s.x && (pos >> 8) == ((unsigned)s.y & 255) && r->oam[slot * 2 + 1] == s.attr) {
++              oam_match = true;
++              replaced[slot] = true; center = true;
++            }
++          }
++          oam_memo_match[i] = oam_match;
+         }
+       }
+       if(frame_rush.mode==MMX_RUSH_PLAYING && !frame.expand && s.object>=0xe68 && s.object<0x1d08 &&
+@@ -2270,6 +2387,10 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
+       }
+       sprite(&p, r, s.x, s.y, attr, s.size, y, view, objects, !center, asset, s.tile, object_colors, true, false, red_ready || red_death);
+     }
++    if (!oam_memo_hit) {
++      memcpy(oam_memo_replaced, replaced, sizeof(replaced));
++      oam_memo_raster = r;
++    }
+     if (stage) coop_partner_row(&p,r,y,view,objects,object_colors);
+     int bar_first = -1, bar_count = 0;
+     if (hud) for (int slot = 16; slot <= 48; ++slot) {
+@@ -2347,42 +2468,10 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
+     if (swapping) teleport_actor_row(frame.ram,&frame_zero,&p,r,y,view,objects,object_colors);
+     if(coop_hud) coop_hud_row(&p,r,y,view,hud,objects,object_colors);
+     if(rush_hud) rush_hud_row(&p,r,y,view,objects,object_colors);
+-    for (int sx = 0; sx < view.width; ++sx) {
+-      int x = sx - view.extra;
+-      if (menu && (x < 0 || x >= 256)) { out[y * view.width + sx] = 0; continue; }
+-      uint16_t screens[2] = {0x500, 0x500}, bg[3] = {0};
+-      int bg_colors[3] = {-1, -1, -1};
+-      for (int layer = 0; layer < 3; ++layer) if ((p.screenEnabled[0] | p.screenEnabled[1]) & (1 << layer)) {
+-        int bx = x, by = y + 1;
+-        if (stage && layer==0) by+=crystal_ripple[y];
+-        if (p.mosaic & (1 << layer)) { int size = (p.mosaic >> 4) + 1;
+-          bx -= ((bx % size) + size) % size; by -= by % size; }
+-        bg[layer] = background(&p, r, layer, bx, by, stage, &bg_colors[layer]);
+-      }
+-      if (palette_fade) {
+-        for (int layer = 0; layer < 3; ++layer) if (bg_colors[layer] >= 0)
+-          bg_colors[layer] = MmxRenderAssetsFadeColor((uint16_t)bg_colors[layer], palette_fade);
+-        if (object_colors[sx] >= 0)
+-          object_colors[sx] = MmxRenderAssetsFadeColor((uint16_t)object_colors[sx], palette_fade)|(object_colors[sx]&0x8000);
+-      }
+-      uint16_t camouflage_bg=0x500;
+-      for (int sub = 0; sub < 2; ++sub) {
+-        for (int layer = 0; layer < 3; ++layer)
+-          if ((p.screenEnabled[sub] & (1 << layer)) &&
+-              (!(p.screenWindowed[sub] & (1 << layer)) || !window(&p, layer, x, view.extra)) && bg[layer] > screens[sub]) screens[sub] = bg[layer];
+-        if(!sub) camouflage_bg=screens[0];
+-        if ((p.screenEnabled[sub] & 16) && (!(p.screenWindowed[sub] & 16) || !window(&p, 4, x, view.extra)) &&
+-            objects[sx] > screens[sub]) screens[sub] = objects[sx];
+-      }
+-      bool color_window = window(&p, 5, x, view.extra);
+-      if (beam_count) {
+-        color_window = false;
+-        for (unsigned i = 0; i < beam_count; ++i)
+-          color_window |= x >= beams[i].left[y] && x <= beams[i].right[y];
+-      }
+-      out[y * view.width + sx] = colour(&p, r->palette, brightness, screens[0], screens[1], color_window, object_colors[sx], bg_colors,
+-                                       dialogue_backdrop && (x < 0 || x >= 256),camouflage_bg);
+-    }
++  }
++  {
++    ComposeContext ctx = {out, view, stage, menu, beam_count, beams, palette_fade, crystal_ripple};
++    compose_rows(&ctx);
+   }
+   for (unsigned i = 0; i < frame_debug_rect_count; ++i)
+     draw_debug_rect(out, view, &frame_debug_rects[i]);

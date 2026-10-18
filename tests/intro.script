@@ -1,0 +1,17 @@
+wait 1100
+press start 4
+wait 120
+press start 4
+wait 120
+press start 4
+wait 120
+press start 4
+wait 700
+press right 200
+press b+right 15
+press right 60
+press y 4
+wait 20
+press y 4
+wait 300
+quit

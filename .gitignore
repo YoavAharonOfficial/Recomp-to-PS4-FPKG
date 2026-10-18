@@ -1,0 +1,9 @@
+# Build trees and packaged output (pkgs may bundle a ROM: never commit them)
+build-*/
+out/
+work/
+*.pkg
+# ROMs and anything derived from them
+*.sfc
+*.smc
+*.rom.tmp

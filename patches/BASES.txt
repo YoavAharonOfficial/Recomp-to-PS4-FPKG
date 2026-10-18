@@ -1,0 +1,2 @@
+snesrecomp e9f5f65f8fc01ac4a3b416a8499d6bc26606ab06
+MegaManXSNESRecomp 42040fdb5a0418ef7f34410c695c119d4aa37eb6
