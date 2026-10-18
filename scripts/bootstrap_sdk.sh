@@ -178,6 +178,11 @@ echo "== SDL2 2.0.18 (PacBrew, GLES2 via Piglet)"
 # exists in this SDK) into SDL2's link interface. The snesrecomp host resamples
 # 32040 Hz itself, so SDL's resampler is unused: force it off.
 sed -i 's/^\(\s*\)set(SDL_LIBSAMPLERATE ON)/\1set(SDL_LIBSAMPLERATE OFF)/' sdl/CMakeLists.txt
+# Port patches to the PS4 video driver (Piglet in app flexible memory; SDL's
+# PS4 log callback through stdio so it reaches the host log). Idempotent.
+for p in "$HERE"/../patches/sdl/*.patch; do
+  git -C sdl apply --reverse --check "$p" 2>/dev/null || git -C sdl apply "$p"
+done
 ( . "$SDK/ps4vars.sh"
   rm -rf sdl/build && openorbis-cmake -S sdl -B sdl/build -G Ninja -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
       -DCMAKE_INSTALL_PREFIX="$SDK/usr" -DCMAKE_BUILD_TYPE=Release -DSDL_TEST=OFF \

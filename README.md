@@ -75,6 +75,17 @@ caller's object. In this port that clobbered a callee-saved register inside
 `SDL_CreateMutex` and crashed at boot. `scripts/bootstrap_sdk.sh` patches the
 four types and `PTHREAD_ONCE_INIT` before building musl, libc++ and SDL.
 
+### SDK fix: Piglet memory (`patches/sdl/`)
+
+PacBrew's SDL configures Piglet with `flags = 0`. Piglet then takes its
+shared memory from the system flexible pool, which a game-type fpkg cannot
+map on newer firmware, and `eglGetDisplay()` returns `EGL_NO_DISPLAY`
+("Could not get EGL display"). The patch uses
+`USE_COMPOSITE_EXT | USE_FLEXIBLE_MEMORY`, the configuration of the OpenOrbis
+Piglet sample and of PacBrew's own earlier fix, with a 128 MiB system share.
+It also sends SDL's PS4 log callback through stdio, so its messages reach the
+host log as well as klog.
+
 ### SDK fix: libsamplerate
 
 PacBrew's SDL forces libsamplerate on for PS4. Its header probe can find the
