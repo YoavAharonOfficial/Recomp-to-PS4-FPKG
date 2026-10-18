@@ -11,6 +11,7 @@ function(srps4_add_host target)
     target_sources(${target} PRIVATE
         ${SRPS4_ROOT}/src/srps4_main.c
         ${SRPS4_ROOT}/src/srps4_paths.c
+        ${SRPS4_ROOT}/src/srps4_log.c
         ${SRPS4_ROOT}/src/srps4_ucontext.c
         ${SRPS4_ROOT}/src/srps4_ucontext.S)
 
@@ -19,6 +20,16 @@ function(srps4_add_host target)
     foreach(fn open stat lstat mkdir rename unlink rmdir truncate chdir getcwd)
         target_link_options(${target} PRIVATE "LINKER:--wrap=${fn}")
     endforeach()
+    # Capture stdout/stderr at the stdio-call level (srps4_log.c): retail
+    # firmware ignores freopen()/dup2() onto fds 1 and 2.
+    foreach(fn fprintf vfprintf printf vprintf fputs puts fputc putc putchar
+               fwrite perror fflush)
+        target_link_options(${target} PRIVATE "LINKER:--wrap=${fn}")
+    endforeach()
+    if(NOT SRPS4_TARGET_PS4)
+        # glibc's fortified __fprintf_chk & co. would bypass the wraps.
+        target_compile_options(${target} PRIVATE -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0)
+    endif()
     target_compile_definitions(${target} PRIVATE
         SRPS4_GAME_ENTRY=${H_ENTRY}
         SRPS4_DATA_DIR="${H_DATA_DIR}"

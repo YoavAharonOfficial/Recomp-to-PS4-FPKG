@@ -31,7 +31,7 @@ index d1f6893..5b3ef8f 100644
  typedef struct Fiber {
      ucontext_t ctx;
 diff --git a/runner/src/desktop/host_main.c b/runner/src/desktop/host_main.c
-index 3bc3905..1aaf264 100644
+index 3bc3905..5149adc 100644
 --- a/runner/src/desktop/host_main.c
 +++ b/runner/src/desktop/host_main.c
 @@ -164,7 +164,14 @@ static void HandleInput(int keyCode, int keyMod, bool pressed);
@@ -77,16 +77,26 @@ index 3bc3905..1aaf264 100644
    snesrecomp_opengl_set_viewport(game->compute_viewport);
  #endif
    const char *build_version = game->build_version ? game->build_version : "dev";
-@@ -3503,7 +3510,7 @@ int snesrecomp_desktop_main(const SnesDesktopHostGame *game, int argc, char **ar
+@@ -3503,7 +3510,17 @@ int snesrecomp_desktop_main(const SnesDesktopHostGame *game, int argc, char **ar
        g_current_window_scale * WindowBaseHeight();
  
    RendererApply(RendererChoice());
 -#ifndef __ANDROID__
++#if defined(SRPS4) && SRPS4_CONSOLE
++  /* PS4 (PacBrew SDL): the window *is* the Piglet EGL surface, created once
++   * at the requested size. Match the 1080p video-out buffer, as PacBrew's own
++   * apps do, and drop RESIZABLE. (SDL_CreateWindow adds SDL_WINDOW_OPENGL by
++   * itself on the PS4 driver; forcing it here would break the dummy driver
++   * used for emulator smoke tests.) The game frame scales to the drawable. */
++  window_width = 1920;
++  window_height = 1080;
++  g_win_flags &= ~SDL_WINDOW_RESIZABLE;
++#endif
 +#if !SNESRECOMP_NO_GL_PRESENTER
    if (g_config.output_method == kOutputMethod_OpenGL) {
      g_win_flags |= SDL_WINDOW_OPENGL;
      snesrecomp_opengl_set_vsync(VSyncInterval());
-@@ -3629,6 +3636,21 @@ error_reading:;
+@@ -3629,6 +3646,21 @@ error_reading:;
    if (!g_renderer_funcs.Initialize(window)) {
      host_report_breadcrumb("renderer init FAILED (output_method=%d)",
                             g_config.output_method);
@@ -108,7 +118,7 @@ index 3bc3905..1aaf264 100644
      return 1;
    }
    host_report_breadcrumb("renderer initialized: %s",
-@@ -4539,7 +4561,7 @@ static void RequestScreenshot(void) {
+@@ -4539,7 +4571,7 @@ static void RequestScreenshot(void) {
      return;
    s_last_screenshot_time = now;
  

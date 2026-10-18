@@ -39,19 +39,16 @@ static char s_pkg_dir[512];
 const char *srps4_data_dir(void) { return s_data_dir; }
 const char *srps4_pkg_dir(void) { return s_pkg_dir; }
 
-/* Every message also goes to the kernel log, so GoldHEN's klog (port 3232)
- * shows a live trace without the player having to fetch a file. */
+/* Every message goes through stderr, which srps4_log.c captures into
+ * /data/<Title>/logs/last_run.txt and mirrors to the kernel log, so GoldHEN's
+ * klog (port 3232) shows a live trace without fetching a file. */
+int srps4_log_open(const char *path);
 void srps4_log(const char *fmt, ...) {
   char buf[1024];
   va_list ap;
   va_start(ap, fmt);
   vsnprintf(buf, sizeof(buf), fmt, ap);
   va_end(ap);
-#if SRPS4_CONSOLE
-  sceKernelDebugOutText(0, "[srps4] ");
-  sceKernelDebugOutText(0, buf);
-  sceKernelDebugOutText(0, "\n");
-#endif
   fprintf(stderr, "[srps4] %s\n", buf);
   fflush(stderr);
 }
@@ -183,13 +180,13 @@ static void redirect_stdio(void) {
   snprintf(log_path, sizeof(log_path), "%s/logs", s_data_dir);
   mkdir_p(log_path);
   snprintf(log_path, sizeof(log_path), "%s/logs/last_run.txt", s_data_dir);
-  /* stderr carries the host's breadcrumbs; keep the most recent run only.
-   * Truncate once, then open both streams O_APPEND so their writes
-   * interleave at the end instead of overwriting each other. */
-  FILE *trunc = fopen(log_path, "w");
-  if (trunc) fclose(trunc);
-  if (freopen(log_path, "a", stderr)) setvbuf(stderr, NULL, _IOLBF, 0);
-  if (freopen(log_path, "a", stdout)) setvbuf(stdout, NULL, _IOLBF, 0);
+  /* No freopen()/dup2(): retail firmware ignores both on fds 1/2 (the log
+   * stayed empty). stdio calls on stdout/stderr are wrapped at link time
+   * instead and land in this file (see srps4_log.c). */
+  if (srps4_log_open(log_path) != 0)
+    srps4_log("cannot open %s (errno %d); logging to klog only", log_path, errno);
+  /* Keep the game from re-pointing stdout/stderr at its own log file. */
+  setenv("MMX_LOG_CONSOLE", "1", 1);
 }
 
 int main(int argc, char **argv) {
@@ -211,9 +208,7 @@ int main(int argc, char **argv) {
   if (mkdir_p(s_data_dir) != 0) {
     srps4_log("cannot create %s (errno %d)", s_data_dir, errno);
   }
-#if SRPS4_CONSOLE
   redirect_stdio();
-#endif
   srps4_log("%s starting; package=%s data=%s", SRPS4_TITLE, s_pkg_dir, s_data_dir);
   provision_data_dir();
   /* Relative I/O resolves against the data dir via srps4_paths.c whether or
