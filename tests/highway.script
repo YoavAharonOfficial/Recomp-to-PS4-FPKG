@@ -1,0 +1,534 @@
+wait 1100
+press start 4
+wait 120
+press start 4
+wait 120
+press start 4
+wait 120
+press start 4
+wait 700
+press right 200
+press b+right 15
+press right 60
+press y 4
+wait 20
+press y 4
+wait 300
+press a+b+right 4
+wait 30
+press right 4
+wait 15
+press a+right 4
+wait 5
+press b 80
+press a+b+right 10
+wait 30
+press b+right 4
+press a+right 4
+press a+b+right 4
+press b+right 80
+press left 80
+wait 15
+press a+b+right 20
+wait 30
+press a+right 40
+press right 4
+press b+right 4
+press a+b+right 40
+wait 5
+press up 40
+wait 30
+press a+right 10
+wait 15
+press b+right 80
+wait 15
+press a+b+right 4
+press right 4
+wait 5
+press left 10
+press a+b+right 4
+press b 40
+press a+b+right 40
+wait 15
+press up 10
+press down+y 40
+wait 5
+press y+right 40
+press b+right 80
+wait 15
+press y 20
+press b 4
+press y+right 80
+press left 10
+press b 40
+press b+right 40
+wait 15
+press right 10
+press b+right 20
+press a+b+right 4
+press b+right 40
+press b+right 40
+wait 15
+press down+y 10
+press b 10
+press y 10
+press a+right 20
+wait 15
+press down+y 10
+press down+y 40
+press y+right 4
+press y+right 80
+wait 15
+press y+right 4
+press right 4
+press y+right 10
+wait 15
+press b 10
+press right 40
+press left 80
+press left 40
+press up 10
+press b+right 20
+wait 15
+press up 20
+press y 20
+wait 30
+press up 40
+wait 15
+press a+right 40
+wait 15
+press right 4
+press left 40
+press a+b+right 10
+press a+b+right 10
+wait 15
+press right 80
+press y+right 80
+press up 40
+press a+b+right 4
+press a+b+right 4
+wait 15
+press b+right 10
+press up 20
+press left 20
+press up 20
+press left 80
+wait 30
+press left 4
+press up 10
+press b 20
+press b+right 80
+press down+y 4
+press left 20
+wait 5
+press y 4
+press right 10
+press b 80
+press down+y 4
+press left 20
+press up 10
+press b+right 4
+press b 80
+wait 15
+press a+b+right 10
+press up 80
+wait 30
+press a+right 10
+press down+y 40
+press b 10
+press down+y 80
+press up 40
+wait 5
+press b 40
+press up 80
+wait 5
+press up 10
+press down+y 40
+press right 4
+press b+right 20
+press b 10
+press right 10
+press right 20
+press y 10
+wait 5
+press a+right 10
+press up 80
+press y+right 80
+press right 20
+press right 80
+press up 20
+wait 15
+press b 10
+wait 15
+press up 20
+wait 30
+press right 10
+press up 20
+press b 20
+press left 10
+press y+right 4
+press down+y 40
+wait 15
+press left 10
+press up 40
+press up 80
+press a+b+right 80
+press b 80
+wait 30
+press down+y 40
+press y+right 4
+press a+b+right 4
+press y+right 20
+wait 30
+press b+right 20
+press left 80
+press down+y 10
+press right 40
+press a+b+right 80
+wait 15
+press b+right 4
+wait 30
+press b 10
+press a+right 20
+wait 30
+press b 80
+wait 5
+press right 20
+press b 20
+press y 80
+press y+right 40
+press right 20
+press left 20
+press up 10
+wait 5
+press up 40
+press y 80
+press down+y 20
+press y 40
+wait 30
+press a+b+right 20
+wait 15
+press y+right 10
+press y+right 4
+wait 30
+press b 80
+wait 15
+press right 80
+press b+right 4
+wait 5
+press right 40
+press a+b+right 40
+press a+right 20
+press b 80
+press right 4
+press right 80
+wait 5
+press y 40
+wait 5
+press left 4
+press b 80
+wait 15
+press a+b+right 20
+press y+right 4
+press a+right 40
+wait 5
+press left 10
+press down+y 20
+wait 15
+press a+right 10
+press y+right 10
+press right 80
+press right 80
+press a+right 10
+press right 4
+press a+b+right 10
+press right 40
+press y 20
+press right 80
+press up 80
+press up 40
+press up 4
+wait 30
+press up 4
+press a+b+right 80
+press a+right 40
+press right 40
+press y 10
+press up 4
+press b 10
+press a+right 4
+press right 10
+wait 30
+press right 20
+press left 80
+wait 5
+press y 40
+wait 15
+press y+right 10
+press a+b+right 80
+wait 15
+press a+right 40
+press left 10
+press left 80
+press left 20
+press up 10
+press right 20
+press up 40
+press y 10
+press b 80
+wait 5
+press b+right 80
+press up 20
+press up 4
+press y 40
+press y 4
+press down+y 20
+press down+y 80
+wait 30
+press b+right 40
+wait 30
+press down+y 10
+press b+right 20
+press up 40
+wait 5
+press b+right 80
+press up 4
+press up 80
+wait 30
+press a+b+right 80
+wait 30
+press right 20
+press right 80
+press left 80
+press right 80
+press down+y 20
+press b+right 80
+press b+right 20
+wait 5
+press right 20
+press b 80
+press y 80
+press y 40
+wait 5
+press b 20
+press b 4
+wait 5
+press a+b+right 20
+press y+right 4
+wait 30
+press y+right 4
+press down+y 80
+press b+right 80
+press y 20
+press y 20
+wait 5
+press up 80
+wait 15
+press y+right 40
+press right 10
+press right 40
+press y 20
+press left 10
+press right 20
+press a+right 20
+wait 30
+press right 80
+press a+b+right 4
+wait 15
+press right 20
+press right 80
+wait 30
+press left 10
+press right 40
+press right 20
+press down+y 40
+press a+b+right 80
+wait 30
+press right 80
+press a+right 20
+wait 30
+press b 20
+press y 40
+press left 80
+wait 30
+press b 10
+press y+right 4
+press a+b+right 80
+press y+right 10
+press b 40
+press left 10
+press a+b+right 20
+press b+right 10
+press down+y 20
+wait 15
+press left 20
+press y+right 80
+press a+b+right 4
+wait 15
+press a+right 40
+wait 30
+press up 4
+wait 15
+press b 20
+wait 30
+press y 40
+wait 5
+press up 80
+press y 4
+press y+right 80
+press b+right 4
+wait 5
+press b+right 40
+press b+right 80
+wait 5
+press y+right 20
+press up 40
+press left 20
+press b+right 20
+wait 30
+press left 40
+press right 80
+press left 20
+press right 10
+wait 30
+press right 4
+press down+y 20
+press a+b+right 4
+press right 20
+press down+y 4
+press y+right 40
+wait 5
+press y 4
+press right 10
+press down+y 80
+press b+right 80
+wait 15
+press b 40
+wait 5
+press right 4
+press right 10
+press b+right 40
+wait 30
+press a+right 20
+press right 4
+wait 30
+press left 20
+press b 40
+press right 4
+press down+y 20
+press a+right 10
+press left 4
+press y 80
+press right 40
+wait 15
+press right 80
+press up 80
+press y+right 4
+press a+right 80
+wait 30
+press b+right 20
+wait 30
+press up 40
+press down+y 4
+wait 5
+press b+right 20
+wait 30
+press b+right 4
+wait 15
+press right 10
+press y 10
+press right 80
+press b 4
+wait 15
+press down+y 40
+press a+right 40
+press right 40
+press b 80
+press up 20
+press up 20
+press down+y 20
+press a+b+right 20
+press y+right 10
+press b+right 20
+press left 40
+press up 20
+wait 30
+press up 80
+press a+b+right 20
+press b+right 80
+wait 5
+press a+right 4
+wait 15
+press b 20
+press left 10
+press down+y 10
+press right 20
+press down+y 40
+wait 15
+press right 40
+wait 5
+press right 20
+wait 30
+press y 80
+press y+right 20
+press b+right 80
+press b+right 10
+press b+right 40
+press a+b+right 40
+press left 20
+wait 5
+press right 80
+press left 10
+press a+b+right 80
+press a+right 10
+press down+y 80
+press y 4
+wait 30
+press a+right 4
+press y 20
+wait 5
+press a+right 10
+wait 5
+press right 20
+wait 5
+press y+right 4
+press left 40
+press a+b+right 10
+wait 5
+press down+y 40
+press right 20
+wait 15
+press a+b+right 20
+press a+right 10
+wait 30
+press b 40
+press left 10
+press down+y 40
+wait 15
+press right 40
+press a+right 20
+press y+right 10
+press y 20
+press a+b+right 20
+press y 40
+wait 15
+press left 80
+press right 4
+press b+right 40
+press a+right 20
+wait 30
+press up 4
+wait 15
+press up 4
+press y+right 40
+press b+right 40
+press a+b+right 10
+press down+y 10
+press down+y 4
+press a+right 80
+press up 4
+wait 15
+press y+right 4
+press a+right 4
+press right 10
+quit
