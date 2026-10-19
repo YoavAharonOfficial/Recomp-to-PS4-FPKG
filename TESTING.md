@@ -73,9 +73,16 @@ SNESRECOMP_RENDER_WORKERS=5       # caller + 4 workers (the console default)
 MMX_RENDER_PIPELINE=0             # compose on the main thread again (no added frame of latency)
 SNESRECOMP_RENDER_PIN=0           # leave every thread unpinned
 SNESRECOMP_OSD_FPS=1              # on-screen FPS counter
-SNESRECOMP_HOST_PROFILE=1         # timing breakdown + per-worker stats into the log
+SNESRECOMP_HOST_PROFILE=1         # timing breakdown, per-worker and [mmx pipe] stats into the log
+SNESRECOMP_HOST_PROFILE_START_FRAME=900   # skip boot and the title screen in the summary
+SNESRECOMP_FRAME_TIMING=/data/MegaManX/logs/frames.csv   # per-frame stage timings (CSV)
 SNESRECOMP_RUN_FRAMES=3600        # quit after N frames (writes the profile summary)
 ```
+
+`[mmx pipe]` lines report three things per 600 frames: the compose thread's
+time per frame, how long the main thread waited for it at submit, and the
+world copy. A `submit_wait_ms` well above zero means compose, not emulation,
+is the bottleneck.
 
 Delete the file to return to the defaults.
 

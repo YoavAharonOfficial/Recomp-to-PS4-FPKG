@@ -156,6 +156,26 @@ ran fast during parallel work and stopped while the process slept.
 `src/srps4_time.c` wraps `clock_gettime` and maps the ids. The host's frame
 pacer was never affected, because it uses `gettimeofday` through SDL.
 
+### Framework fix: frame pacing after a late frame (`host_clock.c`)
+
+When a frame ran late, the host's pacer dropped the debt. It then gated the
+next frame a full period (16.64 ms) after the late frame *finished*. On a
+desktop a frame costs a sliver of the period, so the gate expires right after
+the vblank. On the console a frame costs about 11 ms of a 16.7 ms period. So
+the gate held the next frame ~11 ms past the vblank the present had just
+waited for, that frame missed its own vblank, and the miss made the next
+one late as well.
+
+The display's 59.94 Hz is slower than the SNES's 60.10 Hz, so with vsync on
+every frame is "late" by a hair. The cascade fired every few frames. In the
+1.00-8 console profile, 19% of frames waited a mean 8.2 ms, about 52 fps,
+even though each frame fit the vblank.
+
+On SRPS4 builds a late frame now lets the next one start at once, so vsync
+alone paces the game. `tests/host/host_clock_test.c` gains a case that
+replays the console's shape (vsync, 59.94 Hz, 11 ms of work). It fails on the
+old rule and passes on the new one.
+
 
 ## Building
 

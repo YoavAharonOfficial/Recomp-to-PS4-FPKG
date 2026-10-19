@@ -30,6 +30,35 @@ index d1f6893..5b3ef8f 100644
  
  typedef struct Fiber {
      ucontext_t ctx;
+diff --git a/runner/src/desktop/host_clock.c b/runner/src/desktop/host_clock.c
+index c2a9529..2aa8e9e 100644
+--- a/runner/src/desktop/host_clock.c
++++ b/runner/src/desktop/host_clock.c
+@@ -24,8 +24,24 @@ void snes_host_clock_simulation_done(SnesHostClock *c, double now,
+   /* Keep ordinary sub-frame scheduling jitter on the original phase. A
+    * loader may preserve its backlog so its non-interactive frames refill the
+    * guest-driven audio queue; all ordinary gameplay drops stale work. */
++#if defined(SRPS4)
++  /* A late frame drops its debt but may start the next one at once. Gating
++   * it a full period after this frame's END (below) is harmless while the
++   * frame costs a sliver of the period, as on a desktop. On the console a
++   * frame costs ~2/3 of it: the extra gate pushed the next start ~11 ms past
++   * the vblank the present just waited for, that frame missed its own vblank,
++   * and the miss made the next one late too. The display's 59.94 Hz versus
++   * the SNES's 60.10 Hz makes every frame "late" by a hair, so with vsync on
++   * this cascade fired every few frames (console profile: deadline-wait on
++   * 19% of frames, ~52 fps with ~11 ms of work per frame). The gate is the
++   * instant just after `now`, so a caller that loops while due at one frozen
++   * `now` still runs exactly one frame. */
++  c->next_simulation = preserve_debt || now <= deadline
++      ? deadline : nextafter(now, INFINITY);
++#else
+   c->next_simulation = preserve_debt || now <= deadline
+       ? deadline : now + 1.0 / c->simulation_hz;
++#endif
+   ++c->simulation_frames;
+ }
+ 
 diff --git a/runner/src/desktop/host_main.c b/runner/src/desktop/host_main.c
 index 3bc3905..5149adc 100644
 --- a/runner/src/desktop/host_main.c
@@ -307,3 +336,35 @@ index bd34fbf..b3e50f5 100644
    mutex_unlock(&pool->submission);
    return true;
  }
+diff --git a/tests/host/host_clock_test.c b/tests/host/host_clock_test.c
+index 24ac636..a4456ac 100644
+--- a/tests/host/host_clock_test.c
++++ b/tests/host/host_clock_test.c
+@@ -72,6 +72,27 @@ int main(void) {
+   }
+   assert(pal.simulation_frames >= 50 && pal.simulation_frames <= 51); /* 1.0 vs 50 x 0.02 in floating point */
+ 
++#if defined(SRPS4)
++  /* Console (vsync on a 59.94 Hz display, ~11 ms of work per frame): a late
++   * frame must not gate the next one a full period after its own end, or the
++   * next start lands ~11 ms past the vblank and misses the following one. */
++  SnesHostClock vsync;
++  snes_host_clock_reset(&vsync, 0, sim, 60);
++  const double vblank = 1 / 59.94, work = 0.011;
++  double t = 0, waited = 0;
++  for (int f = 0; f < 600; ++f) {
++    if (!snes_host_clock_simulation_due(&vsync, t)) {
++      waited += vsync.next_simulation - t;
++      t = vsync.next_simulation;
++    }
++    double done = t + work;
++    snes_host_clock_simulation_done(&vsync, done, false, 1);
++    t = ceil(done / vblank) * vblank;   /* present blocks to the next vblank */
++  }
++  assert(fabs(t - 600 * vblank) < 1e-6);   /* one vblank per frame, no misses */
++  assert(waited < 0.001);
++#endif
++
+   /* Presentation-rate policy: an explicit supported fps wins, otherwise the
+    * display's refresh, clamped; garbage falls back to 60. */
+   assert(snes_host_valid_fps(0) && snes_host_valid_fps(144) && !snes_host_valid_fps(100));

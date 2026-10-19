@@ -127,7 +127,7 @@ index a7db476..2ab14e6 100644
  /* Explicit ROM resource binding for presentation-only dormant actor art. */
  const MmxSpriteAsset *MmxRenderAssetsResource(unsigned stage, unsigned section, unsigned resource);
 diff --git a/src/mmx_renderer.c b/src/mmx_renderer.c
-index 59dcfdf..a01c886 100644
+index 59dcfdf..cd42a75 100644
 --- a/src/mmx_renderer.c
 +++ b/src/mmx_renderer.c
 @@ -19,8 +19,6 @@ typedef struct Raster {
@@ -669,7 +669,7 @@ index 59dcfdf..a01c886 100644
    }
    for (unsigned i = 0; i < frame_debug_rect_count; ++i)
      draw_debug_rect(out, view, &frame_debug_rects[i]);
-@@ -2403,3 +2595,201 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
+@@ -2403,3 +2595,238 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
    }
    return true;
  }
@@ -693,6 +693,7 @@ index 59dcfdf..a01c886 100644
 +#include <pthread.h>
 +#include <stdlib.h>
 +#include <stddef.h>
++#include <time.h>
 +#if SRPS4_CONSOLE
 +int scePthreadSetaffinity(pthread_t thread, unsigned long mask);
 +pthread_t scePthreadSelf(void);
@@ -716,7 +717,17 @@ index 59dcfdf..a01c886 100644
 +  int previous;              /* at submit: the composition it supersedes (N-1) */
 +  bool fresh;                /* a submit happened since the last present */
 +  uint32_t fallback_field[256 * 224];
-+} pipe = {.completed = -1, .previous = -1};
++  /* SNESRECOMP_HOST_PROFILE: where the pipeline's time goes, per 600 jobs. */
++  int profile;               /* -1 unknown, 0 off, 1 on */
++  unsigned stat_jobs;
++  double stat_compose, stat_compose_max, stat_wait, stat_wait_max, stat_copy;
++} pipe = {.completed = -1, .previous = -1, .profile = -1};
++
++static double pipe_now(void) {
++  struct timespec ts;
++  clock_gettime(CLOCK_MONOTONIC, &ts);
++  return ts.tv_sec + ts.tv_nsec * 1e-9;
++}
 +
 +/* copy_world names RenderWorld members directly: suspend the per-thread
 + * aliases for its body. */
@@ -768,8 +779,12 @@ index 59dcfdf..a01c886 100644
 +    unsigned slot = pipe.slot;
 +    pthread_mutex_unlock(&pipe.lock);
 +    uint32_t *out = pipe.out[slot];
++    const double started = pipe.profile ? pipe_now() : 0;
 +    if (!valid || !MmxRendererDraw(out, view, hud)) pipe_fallback(out, view.width);
++    const double took = pipe.profile ? pipe_now() - started : 0;
 +    pthread_mutex_lock(&pipe.lock);
++    pipe.stat_compose += took;
++    if (took > pipe.stat_compose_max) pipe.stat_compose_max = took;
 +    pipe.width[slot] = view.width;
 +    pipe.completed = (int)slot;
 +    pipe.busy = false;
@@ -812,10 +827,32 @@ index 59dcfdf..a01c886 100644
 +void MmxRendererPipelineSubmit(MmxRenderView view, bool hud, bool valid,
 +                               const uint32_t *field) {
 +  if (!pipe_start()) return;
++  if (pipe.profile < 0) {
++    const char *v = getenv("SNESRECOMP_HOST_PROFILE");
++    pipe.profile = v && *v && *v != '0';
++  }
++  const double t0 = pipe.profile ? pipe_now() : 0;
 +  pthread_mutex_lock(&pipe.lock);
 +  pipe_wait_idle_locked();
++  const double t1 = pipe.profile ? pipe_now() : 0;
 +  /* The compose thread is idle: world 1 and the fallback field are free. */
 +  copy_world(&render_worlds[1], &render_worlds[0]);
++  if (pipe.profile) {
++    const double t2 = pipe_now();
++    pipe.stat_wait += t1 - t0;
++    if (t1 - t0 > pipe.stat_wait_max) pipe.stat_wait_max = t1 - t0;
++    pipe.stat_copy += t2 - t1;
++    if (++pipe.stat_jobs == 600) {
++      fprintf(stderr, "[mmx pipe] jobs=600 compose_ms/job=%.3f max=%.3f | "
++              "submit_wait_ms=%.3f max=%.3f | world_copy_ms=%.3f\n",
++              pipe.stat_compose * 1e3 / 600, pipe.stat_compose_max * 1e3,
++              pipe.stat_wait * 1e3 / 600, pipe.stat_wait_max * 1e3,
++              pipe.stat_copy * 1e3 / 600);
++      pipe.stat_jobs = 0;
++      pipe.stat_compose = pipe.stat_compose_max = 0;
++      pipe.stat_wait = pipe.stat_wait_max = pipe.stat_copy = 0;
++    }
++  }
 +  if (field) memcpy(pipe.fallback_field, field, sizeof(pipe.fallback_field));
 +  else memset(pipe.fallback_field, 0, sizeof(pipe.fallback_field));
 +  pipe.view = view; pipe.hud = hud; pipe.valid = valid;
