@@ -7,3 +7,5 @@ work/
 *.sfc
 *.smc
 *.rom.tmp
+build-*.log
+*.profraw

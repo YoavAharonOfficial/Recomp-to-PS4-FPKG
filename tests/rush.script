@@ -1,0 +1,558 @@
+wait 1100
+press down 4
+wait 20
+press down 4
+wait 20
+press down 4
+wait 20
+press start 4
+wait 240
+press start 4
+wait 240
+press start 4
+wait 240
+press y+right 6
+press right 4
+press left 13
+press b+left 8
+wait 14
+press a+right 4
+wait 18
+press a+right 3
+press left 9
+press down 3
+press a+right 3
+press right 19
+press b+right 15
+wait 4
+press down 11
+press up+y 7
+wait 19
+press up+y 8
+press b+left 24
+wait 2
+press down 8
+press b+left 15
+press y+left 20
+press y+right 11
+wait 6
+press y 4
+press b+left 17
+press y+left 11
+press left 5
+press b 26
+press y+left 15
+wait 3
+press b+left 20
+press y+right 12
+press down 17
+press y+left 4
+press b+right 17
+press left 3
+press b+right 22
+press up+y 28
+press a+right 30
+press right 16
+press down 5
+press y 26
+wait 8
+press a+right 14
+press y+left 4
+wait 13
+press b+left 10
+press a+right 29
+press a+right 13
+press a+right 9
+wait 6
+press b 9
+press right 17
+press b 10
+wait 5
+press a+right 19
+press down 12
+press b+left 21
+press right 16
+press up+y 27
+press a+right 14
+press y+left 22
+press y 4
+press y+left 7
+wait 20
+press right 5
+wait 5
+press b+left 5
+press down 2
+wait 7
+press down 14
+wait 9
+press y+right 21
+press left 5
+press y+left 17
+press left 6
+wait 11
+press b+right 17
+press b 18
+wait 17
+press y+right 6
+press right 26
+press up+y 29
+wait 9
+press b+left 13
+press y+right 26
+wait 18
+press b+left 12
+press down 27
+press y 27
+wait 13
+press y 8
+press y+right 25
+wait 1
+press b+right 17
+wait 20
+press y+right 16
+press y+right 13
+wait 4
+press y 17
+wait 7
+press y+left 21
+press down 28
+wait 12
+press up+y 4
+press left 14
+press y 17
+press a+right 27
+press left 27
+press a+right 16
+press left 25
+wait 5
+press right 6
+press y+left 27
+press down 28
+press y+left 23
+press b 19
+press right 2
+press up+y 5
+press b 15
+press y 28
+press right 10
+wait 17
+press y 26
+press b+right 19
+press b 3
+press y+right 30
+press down 28
+press a+right 28
+press b+left 6
+press b+left 18
+wait 15
+press b 21
+wait 5
+press b 6
+press left 19
+wait 17
+press b+left 19
+press left 30
+press y 8
+wait 4
+press b+left 16
+press left 16
+press b+left 21
+press b+right 16
+press y+left 18
+press b+left 30
+press b+right 19
+press y 28
+press a+right 5
+press y+right 4
+press a+right 4
+wait 10
+press left 30
+press up+y 23
+press b+right 30
+wait 15
+press y 25
+press a+right 30
+press up+y 28
+wait 14
+press b+left 14
+press y 13
+press y+right 2
+press y+left 16
+press a+right 12
+press b+right 18
+press left 27
+wait 4
+press left 10
+wait 6
+press b+right 26
+wait 14
+press up+y 28
+press a+right 6
+press b+left 20
+press y+right 4
+wait 6
+press a+right 30
+wait 1
+press up+y 4
+press left 21
+press left 10
+press y+left 2
+press b+left 15
+press b+right 21
+wait 17
+press y 5
+press b+right 3
+wait 10
+press up+y 11
+press y 11
+press up+y 7
+wait 1
+press b+right 3
+wait 17
+press b+left 8
+press y 16
+wait 14
+press up+y 17
+press a+right 18
+press y 9
+press up+y 6
+press y+right 3
+press right 4
+press b+right 15
+wait 3
+press up+y 28
+press b+left 23
+press down 9
+press right 16
+wait 9
+press y+left 2
+wait 11
+press b+left 12
+wait 10
+press y 13
+wait 11
+press a+right 4
+press b+left 22
+wait 17
+press right 4
+wait 3
+press b 14
+press a+right 2
+wait 8
+press left 20
+press b 23
+press down 14
+press y+left 6
+wait 20
+press up+y 6
+wait 17
+press up+y 15
+press b+left 6
+press b+left 20
+press right 28
+press up+y 24
+press left 2
+wait 12
+press left 14
+press b+left 3
+press up+y 19
+press y+left 10
+wait 3
+press b+left 30
+press up+y 18
+wait 16
+press b+right 27
+wait 9
+press y 25
+press y 25
+press y+left 17
+press left 17
+press b+right 26
+wait 7
+press left 21
+wait 9
+press up+y 25
+press down 20
+wait 16
+press right 17
+wait 4
+press y 23
+press b+left 11
+press y+left 26
+wait 18
+press y 11
+press y+left 2
+wait 3
+press b+left 16
+press a+right 8
+press y 4
+press b 25
+press y+right 6
+press up+y 18
+wait 4
+press y+right 9
+press y+left 14
+wait 1
+press y+left 23
+press b+right 25
+wait 12
+press a+right 12
+wait 11
+press right 12
+press a+right 5
+press y 24
+wait 10
+press b+right 13
+wait 13
+press down 4
+press a+right 26
+wait 2
+press b+right 5
+wait 10
+press up+y 6
+wait 9
+press a+right 18
+press y+right 27
+press right 27
+press a+right 30
+press b+left 8
+press right 25
+press down 26
+wait 10
+press y+left 3
+press b+left 6
+wait 14
+press y+right 11
+wait 9
+press a+right 22
+wait 16
+press b+left 23
+press b 22
+wait 7
+press b+left 30
+press b+left 9
+press y+right 26
+press b 19
+wait 3
+press b 12
+press y+right 9
+press down 8
+press a+right 14
+press b+left 8
+press y+right 26
+wait 9
+press down 13
+wait 17
+press b+left 22
+press y 4
+wait 8
+press a+right 14
+press a+right 11
+press right 6
+wait 16
+press down 17
+wait 13
+press b+left 29
+press y+left 9
+press y 6
+wait 4
+press up+y 29
+press y+left 4
+press right 2
+press y 20
+press up+y 24
+press b 22
+wait 14
+press left 5
+wait 17
+press down 8
+press y 27
+press right 19
+press y+left 10
+press up+y 28
+press y+left 18
+wait 8
+press right 15
+press b+right 3
+wait 16
+press up+y 22
+press b+right 9
+press y+right 9
+press y+right 24
+press up+y 14
+wait 10
+press b+left 4
+wait 7
+press b+right 26
+press y 16
+wait 10
+press left 21
+press b 30
+wait 14
+press up+y 3
+press b 14
+wait 1
+press down 6
+press right 7
+press y+right 25
+wait 3
+press b 12
+wait 17
+press y+left 3
+press a+right 28
+press y+right 16
+wait 1
+press left 10
+wait 14
+press left 19
+press y 14
+press b+right 28
+press left 3
+press y 13
+press y+left 8
+press y+left 2
+press y 27
+press a+right 3
+press y+left 4
+press right 10
+wait 3
+press down 12
+press y+right 21
+wait 11
+press b+right 11
+wait 20
+press up+y 4
+wait 8
+press left 17
+press y+left 26
+press b+right 15
+press b 17
+wait 10
+press b 21
+wait 11
+press y+left 13
+press down 4
+press a+right 26
+wait 14
+press left 22
+wait 18
+press b+left 12
+wait 14
+press left 4
+wait 3
+press y 5
+press y+left 7
+wait 14
+press y+left 21
+press y 25
+press up+y 26
+wait 10
+press b+right 10
+press y+right 10
+press y 16
+wait 8
+press y 6
+wait 19
+press y 12
+wait 9
+press y 18
+press up+y 27
+wait 15
+press right 5
+wait 8
+press y+left 13
+wait 10
+press y 5
+wait 20
+press down 8
+press y+right 18
+press y+left 21
+wait 1
+press left 22
+press down 13
+wait 12
+press y+right 6
+wait 9
+press right 21
+press y 28
+wait 11
+press a+right 23
+press down 11
+wait 2
+press y+left 19
+press a+right 5
+press up+y 19
+wait 18
+press left 22
+wait 9
+press a+right 11
+press a+right 3
+press down 30
+press a+right 2
+press y+right 22
+wait 13
+press y 2
+press b 15
+wait 3
+press a+right 20
+press y+left 26
+wait 1
+press right 19
+wait 13
+press left 20
+press y+right 25
+press b 13
+wait 17
+press b 4
+wait 16
+press y 11
+wait 2
+press y+left 12
+wait 13
+press left 30
+press b 22
+press y 21
+press y 28
+press down 8
+wait 17
+press b 14
+press b 9
+press y 3
+press up+y 3
+press y+right 5
+press y+left 19
+press b+right 22
+press down 9
+press up+y 13
+press y+left 7
+wait 20
+press y+left 16
+wait 20
+press y+left 28
+wait 16
+press a+right 5
+wait 12
+press a+right 13
+wait 15
+press b+left 18
+press right 22
+wait 11
+press b+left 4
+wait 17
+press a+right 22
+press b 2
+press down 25
+press left 8
+wait 16
+press b+right 27
+press b 23
+press y 4
+press down 26
+wait 11
+press down 10
+press y+left 6
+wait 16
+press y 20
+wait 17
+press y 12
+quit
