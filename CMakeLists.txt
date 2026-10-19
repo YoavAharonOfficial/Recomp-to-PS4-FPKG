@@ -46,3 +46,10 @@ endif()
 
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/srps4_helpers.cmake")
 include("${SRPS4_PROFILE_DIR}/game.cmake")
+
+# Native smoke builds: glibc's fortified __fprintf_chk & co. bypass the stdio
+# wraps (srps4_log.c), so the separately built worker library is compiled
+# unfortified too, keeping its diagnostics in last_run.txt as on the console.
+if(TARGET snesrecomp_render_workers AND NOT SRPS4_TARGET_PS4)
+    target_compile_options(snesrecomp_render_workers PRIVATE -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0)
+endif()

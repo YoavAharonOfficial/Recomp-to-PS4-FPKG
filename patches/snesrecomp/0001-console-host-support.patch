@@ -151,10 +151,10 @@ index 216a8ff..bc67835 100644
      return (n > 0 && n < max_len) ? 1 : 0;
  #elif defined(__APPLE__)
 diff --git a/runner/src/render_workers.c b/runner/src/render_workers.c
-index bd34fbf..87887cc 100644
+index bd34fbf..93750ad 100644
 --- a/runner/src/render_workers.c
 +++ b/runner/src/render_workers.c
-@@ -36,7 +36,14 @@ static void condition_wake(WorkerCondition *c) { pthread_cond_signal(c); }
+@@ -36,11 +36,55 @@ static void condition_wake(WorkerCondition *c) { pthread_cond_signal(c); }
  static void condition_wake_all(WorkerCondition *c) { pthread_cond_broadcast(c); }
  static void condition_destroy(WorkerCondition *c) { pthread_cond_destroy(c); }
  static void thread_join(WorkerThread t) { pthread_join(t, NULL); }
@@ -169,3 +169,139 @@ index bd34fbf..87887cc 100644
  #define WORKER_ENTRY void *
  #define WORKER_RETURN NULL
  #endif
+ 
++/* snesrecomp-ps4: pinning + per-slot diagnostics.
++ * The PS4 scheduler (FreeBSD ULE) tends to wake a sleeping thread near the
++ * CPU that woke it. These workers sleep between frames and run for a few ms
++ * per frame, so unpinned they can pile onto the main thread's core and the
++ * "parallel" compose serializes (console: 12.8 ms for 4 participants where
++ * ~6-8 ms was expected). On the console the caller is pinned to core 0 and
++ * worker k to core k, inside the six cores a game process owns. */
++#if defined(SRPS4) && SRPS4_CONSOLE
++int scePthreadSetaffinity(pthread_t thread, unsigned long mask);
++pthread_t scePthreadSelf(void);
++int sceKernelGetCurrentCpu(void);
++/* SNESRECOMP_RENDER_PIN=0 disables pinning (A/B from srps4_env.txt). */
++static bool pinning_enabled(void) {
++  const char *v = getenv("SNESRECOMP_RENDER_PIN");
++  return !(v && *v == '0');
++}
++static void pin_current_thread(unsigned core) {
++  if (pinning_enabled()) scePthreadSetaffinity(scePthreadSelf(), 1ul << core);
++}
++static int current_cpu(void) { return sceKernelGetCurrentCpu(); }
++#else
++static void pin_current_thread(unsigned core) { (void)core; }
++static int current_cpu(void) { return -1; }
++#endif
++#ifdef _WIN32
++static double worker_now(void) { return 0; }
++#else
++#include <stdio.h>
++#include <string.h>
++#include <time.h>
++static double worker_now(void) {
++  struct timespec t;
++  clock_gettime(CLOCK_MONOTONIC, &t);
++  return (double)t.tv_sec + (double)t.tv_nsec / 1e9;
++}
++#endif
++
+ #ifdef _MSC_VER
+ #define WORKER_LOCAL __declspec(thread)
+ #else
+@@ -64,6 +108,12 @@ struct SnesRenderWorkers {
+   bool stopping;
+   SnesRenderRangeFn callback;
+   void *context;
++  /* SNESRECOMP_HOST_PROFILE=1: per-slot busy time, jobs and CPUs seen; each
++   * slot writes only its own entry, so no locking is needed. */
++  bool stats;
++  unsigned long long runs;
++  double run_wall;
++  struct { double busy; unsigned long long jobs; unsigned cpus; } slot_stats[SNES_RENDER_WORKERS_MAX];
+ };
+ 
+ static void invoke(SnesRenderRangeFn callback, void *context, size_t begin,
+@@ -85,7 +135,16 @@ static void run_jobs(SnesRenderWorkers *pool, unsigned slot) {
+     SnesRenderRangeFn callback = pool->callback;
+     void *context = pool->context;
+     mutex_unlock(&pool->state);
+-    invoke(callback, context, begin, end, slot);
++    if (pool->stats) {
++      double t0 = worker_now();
++      invoke(callback, context, begin, end, slot);
++      pool->slot_stats[slot].busy += worker_now() - t0;
++      ++pool->slot_stats[slot].jobs;
++      int cpu = current_cpu();
++      if (cpu >= 0 && cpu < 32) pool->slot_stats[slot].cpus |= 1u << cpu;
++    } else {
++      invoke(callback, context, begin, end, slot);
++    }
+   }
+ }
+ 
+@@ -93,6 +152,7 @@ static WORKER_ENTRY worker_entry(void *opaque) {
+   Worker *worker = opaque;
+   SnesRenderWorkers *pool = worker->pool;
+   unsigned long long seen = 0;
++  pin_current_thread(worker->slot);
+   mutex_lock(&pool->state);
+   for (;;) {
+     while (!pool->stopping && pool->generation == seen)
+@@ -130,7 +190,13 @@ static unsigned participant_limit(unsigned requested) {
+     }
+     if (!requested) {
+       requested = cpus > 1 ? cpus - 1 : 1;
++#if defined(SRPS4) && SRPS4_CONSOLE
++      /* Pinned: caller on core 0, workers on cores 1-4; core 5 stays free
++       * for the audio, SDL and Piglet threads. */
++      if (requested > 5) requested = 5;
++#else
+       if (requested > 4) requested = 4;
++#endif
+     }
+   }
+   if (requested > cpus) requested = cpus;
+@@ -147,6 +213,11 @@ SnesRenderWorkers *SnesRenderWorkersCreate(unsigned max_participants) {
+   if (!mutex_init(&pool->state)) goto free_submission;
+   if (!condition_init(&pool->work)) goto free_state;
+   if (!condition_init(&pool->finished)) goto free_work;
++  {
++    const char *profile = getenv("SNESRECOMP_HOST_PROFILE");
++    pool->stats = profile && *profile && *profile != '0';
++  }
++  pin_current_thread(0);
+   for (unsigned i = 0; i + 1 < participants; ++i) {
+     Worker *worker = &pool->workers[i];
+     worker->pool = pool; worker->slot = i + 1;
+@@ -191,11 +262,29 @@ bool SnesRenderWorkersRun(SnesRenderWorkers *pool, size_t count, size_t grain,
+   ++pool->generation;
+   condition_wake_all(&pool->work);
+   mutex_unlock(&pool->state);
++  double run_start = pool->stats ? worker_now() : 0;
+   run_jobs(pool, 0);
+   mutex_lock(&pool->state);
+   while (pool->pending) condition_wait(&pool->finished, &pool->state);
+   pool->callback = NULL; pool->context = NULL;
+   mutex_unlock(&pool->state);
++  if (pool->stats) {
++    pool->run_wall += worker_now() - run_start;
++    if (++pool->runs == 600) {
++#ifndef _WIN32
++      char line[1024];
++      int n = snprintf(line, sizeof(line), "[render_workers] runs=%llu wall_ms/run=%.3f participants=%u",
++                       pool->runs, pool->run_wall * 1e3 / (double)pool->runs, pool->worker_count + 1);
++      for (unsigned i = 0; i <= pool->worker_count && n > 0 && (size_t)n < sizeof(line); ++i)
++        n += snprintf(line + n, sizeof(line) - (size_t)n, " | s%u busy_ms/run=%.3f jobs=%llu cpus=0x%x",
++                      i, pool->slot_stats[i].busy * 1e3 / (double)pool->runs,
++                      pool->slot_stats[i].jobs, pool->slot_stats[i].cpus);
++      fprintf(stderr, "%s\n", line);
++#endif
++      pool->runs = 0; pool->run_wall = 0;
++      memset(pool->slot_stats, 0, sizeof(pool->slot_stats));
++    }
++  }
+   mutex_unlock(&pool->submission);
+   return true;
+ }
