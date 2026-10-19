@@ -7,7 +7,14 @@ set(SRPS4_ROOT "${CMAKE_CURRENT_LIST_DIR}/.." CACHE INTERNAL "")
 #   calls the game's renamed desktop entry), the offline launcher stub, and the
 #   PS4 system libraries SDL2 needs.
 function(srps4_add_host target)
-    cmake_parse_arguments(H "" "ENTRY;DATA_DIR;TITLE" "" ${ARGN})
+    cmake_parse_arguments(H "WRAP_MAIN" "ENTRY;DATA_DIR;TITLE" "" ${ARGN})
+    if(H_WRAP_MAIN)
+        # Generic profiles: enter through __wrap_main, the title's main() is
+        # reached as __real_main (see srps4_main.c).
+        target_link_options(${target} PRIVATE "LINKER:--wrap=main")
+        set(H_ENTRY __real_main)
+        target_compile_definitions(${target} PRIVATE SRPS4_WRAP_MAIN=1)
+    endif()
     target_sources(${target} PRIVATE
         ${SRPS4_ROOT}/src/srps4_main.c
         ${SRPS4_ROOT}/src/srps4_paths.c

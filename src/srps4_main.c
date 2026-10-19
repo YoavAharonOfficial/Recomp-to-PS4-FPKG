@@ -32,6 +32,20 @@ void srps4_pin_current_thread(unsigned core);
 #  error "SRPS4_DATA_DIR must be defined by the game profile"
 #endif
 
+/* Two ways to reach the title's desktop entry point:
+ *  - a curated profile renames it at compile time (SRPS4_GAME_ENTRY, e.g.
+ *    MMX's mmx_desktop_main), or
+ *  - a generic profile leaves the title's main() untouched and links with
+ *    --wrap=main (SRPS4_WRAP_MAIN): the C runtime then enters here as
+ *    __wrap_main and the title's own main() is __real_main. That works for
+ *    any title without knowing how its main.c is written. */
+#if defined(SRPS4_WRAP_MAIN) && SRPS4_WRAP_MAIN
+#  undef SRPS4_GAME_ENTRY
+#  define SRPS4_GAME_ENTRY __real_main
+#  define SRPS4_MAIN __wrap_main
+#else
+#  define SRPS4_MAIN main
+#endif
 int SRPS4_GAME_ENTRY(int argc, char **argv);
 
 static char s_data_dir[512];
@@ -156,9 +170,18 @@ static void provision_data_dir(void) {
 /* Optional /data/<Title>/srps4_env.txt: KEY=VALUE lines applied with
  * setenv() before the game starts. The console offers no other way to set
  * the host's diagnostic/tuning knobs (e.g. SNESRECOMP_RENDER_WORKERS=1). */
+static void apply_env_path(const char *path, int overwrite);
 static void apply_env_file(void) {
-  char path[600], line[512];
+  char path[600];
+  /* Package defaults first (a generic profile's widescreen/renderer
+   * switches), then the player's file, which wins. */
+  snprintf(path, sizeof(path), "%s/srps4/env_defaults.txt", s_pkg_dir);
+  apply_env_path(path, 0);
   snprintf(path, sizeof(path), "%s/srps4_env.txt", s_data_dir);
+  apply_env_path(path, 1);
+}
+static void apply_env_path(const char *path, int overwrite) {
+  char line[512];
   FILE *f = fopen(path, "r");
   if (!f) return;
   while (fgets(line, sizeof(line), f)) {
@@ -170,6 +193,7 @@ static void apply_env_file(void) {
     char *eq = strchr(p, '=');
     if (!eq || eq == p) continue;
     *eq = '\0';
+    if (!overwrite && getenv(p)) continue;
     setenv(p, eq + 1, 1);
     srps4_log("env: %s=%s", p, eq + 1);
   }
@@ -190,7 +214,7 @@ static void redirect_stdio(void) {
   setenv("MMX_LOG_CONSOLE", "1", 1);
 }
 
-int main(int argc, char **argv) {
+int SRPS4_MAIN(int argc, char **argv) {
 #if SRPS4_CONSOLE
   snprintf(s_pkg_dir, sizeof(s_pkg_dir), "/app0");
   snprintf(s_data_dir, sizeof(s_data_dir), "/data/%s", SRPS4_DATA_DIR);
@@ -253,6 +277,17 @@ int main(int argc, char **argv) {
     for (char *tok = strtok(extra, " "); tok && n < 63; tok = strtok(NULL, " "))
       fake_argv[n++] = tok;
   }
+#ifdef SRPS4_ROM_NAME
+  /* Generic profiles bundle the ROM as rom.sfc in the data dir and name it
+   * explicitly, so a title's own ROM file name (spaces, brackets) never has
+   * to survive packaging. */
+  static char rom_path[600];
+  snprintf(rom_path, sizeof(rom_path), "%s/%s", s_data_dir, SRPS4_ROM_NAME);
+  if (file_exists(rom_path) && n < 62) {
+    fake_argv[n++] = "--rom";
+    fake_argv[n++] = rom_path;
+  }
+#endif
   fake_argv[n] = NULL;
 
   int rc = SRPS4_GAME_ENTRY(n, fake_argv);

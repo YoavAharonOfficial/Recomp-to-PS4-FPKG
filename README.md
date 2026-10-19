@@ -261,12 +261,33 @@ To remap, edit `[GamepadMap]` in `/data/MegaManX/config.ini`. To change mods,
 edit `/data/MegaManX/mods/preloaded/state.toml`: widescreen is `enabled = true`
 with `aspect = "16:9"`.
 
-## Adding another title
+## Adding another title: the converter
 
-Copy `games/megamanx/`. Point `game.cmake` at the title's source list, which
-mirrors its upstream CMake minus the launcher and netplay. Then set the ROM
-name, SHA-1 and regen command in `profile.sh`. Pick a unique 9-character
-`TITLE_ID` and a 16-character `LABEL`. The framework patch is title-agnostic.
+```
+scripts/srps4_convert.py --repo https://github.com/mstan/SuperMetroidRecomp.git \
+    --rom "~/Downloads/Super Metroid (Japan, USA) (En,Ja).sfc" \
+    --emulator ~/shadps4/build/shadps4 --emu-sdk ~/ps4sdk-emu
+```
+
+One command runs every step:
+
+1. Fetch the title and verify your ROM against its `rom_identity.txt`.
+2. Patch the framework, then regenerate the recompiled C from your ROM.
+3. Write a profile under `games/<id>/`, with widescreen defaulted on.
+4. Build and verify natively, and train a PGO profile.
+5. Cross-compile, package and smoke-test the console eboot under shadPS4.
+6. Write `out/<id>-report.md` with a console frame-time estimate.
+
+A title needs no hand-written build file. The generic profile builds the
+title's own `CMakeLists.txt` with the launcher stubbed out and its `main()`
+entered through `--wrap=main`. Titles whose widescreen renderer does not fit
+the Jaguar's budget get a renderer patch in their profile. The plan, the
+gates and the per-title optimization playbook are in `docs/CONVERTER.md`.
+
+| Title | Profile | Widescreen | Renderer patch |
+|---|---|---|---|
+| Mega Man X | curated (`games/megamanx`) | preloaded mod, 16:9 | VRAM sharing, parallel and pipelined compose |
+| Super Metroid | generic (`games/supermetroid`) | `sm-video.ini` / `SNESRECOMP_WIDESCREEN` | VRAM sharing, parallel and pipelined compose |
 
 ## Limits and honesty
 

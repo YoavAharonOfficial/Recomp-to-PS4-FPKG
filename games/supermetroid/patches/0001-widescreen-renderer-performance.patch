@@ -1,0 +1,633 @@
+diff --git a/src/main.c b/src/main.c
+index e5d1079..9250b4e 100644
+--- a/src/main.c
++++ b/src/main.c
+@@ -125,6 +125,15 @@ static void SmBeginSimFrame(unsigned number) {
+ static void SmEndSimFrame(const uint8_t *field, unsigned number) {
+   if (SmCustomRendererEnabled())
+     SmRendererEndFrame((const uint32_t *)field);
++#if defined(SRPS4)
++  /* snesrecomp-ps4: compose this frame on the pipeline thread while the next
++   * one runs. Frames the host will not present (turbo) are not composed. */
++  if (SmRendererPipelineEnabled()) {
++    if (!SmCustomRendererEnabled()) SmRendererPipelineForget();
++    else if (!g_snes->disableRender)
++      SmRendererPipelineSubmit(g_sm_viewport, g_sm_video.hud_anchored, (const uint32_t *)field);
++  }
++#endif
+   const char *capture_frame = getenv("SM_CAPTURE_FRAME");
+   const char *capture_path = getenv("SM_CAPTURE_PATH");
+   if (capture_frame && capture_path && number == strtoul(capture_frame, NULL, 10))
+@@ -135,6 +144,17 @@ static int SmDrawFrame(uint8_t *dst, size_t pitch, const uint8_t *field,
+                        int frame_w, int frame_h, double alpha) {
+   if (!SmCustomRendererEnabled())
+     return 0;
++#if defined(SRPS4)
++  if (SmRendererPipelineEnabled()) {
++    int width = 0;
++    const uint32_t *composed = SmRendererPipelineLatest(&width);
++    if (composed && width == frame_w && frame_h == SM_HEIGHT) {
++      RtlWidescreenPresent(dst, pitch, (const uint8_t *)composed, frame_w, frame_h);
++      return 1;
++    }
++    SmRendererPipelineDrain();   /* geometry changed: compose synchronously */
++  }
++#endif
+   if (!SmRendererDraw(g_sm_output, g_sm_viewport, g_sm_video.hud_anchored, alpha)) {
+     memset(g_sm_output, 0, sizeof(g_sm_output));
+     for (int y = 0; y < SM_HEIGHT; ++y)
+diff --git a/src/sm_renderer.c b/src/sm_renderer.c
+index 65d824b..9bb366b 100644
+--- a/src/sm_renderer.c
++++ b/src/sm_renderer.c
+@@ -3,6 +3,10 @@
+ #include <string.h>
+ #include <math.h>
+ #include <stddef.h>
++#include <stdlib.h>
++#if defined(SM_RENDER_PARALLEL) && SM_RENDER_PARALLEL
++#include "render_workers.h"
++#endif
+ 
+ /* Immutable host snapshots. Presenting never invokes guest code or writes PPU,
+  * WRAM, VRAM or OAM. Each visible line owns its memory image so raster DMA
+@@ -21,8 +25,49 @@ typedef struct SmSourceFrame {
+   uint8_t object_ram[0x20000];
+   bool object_state_valid;
+ } SmSourceFrame;
+-static SmSourceFrame frames[2];
++/* snesrecomp-ps4: a third slot lets the pipelined compose (below) draw frame
++ * N, which reads slots N and N-1, while capture fills slot N+1. */
++#if defined(SRPS4)
++enum { SM_FRAME_SLOTS = 3 };
++#else
++enum { SM_FRAME_SLOTS = 2 };
++#endif
++static SmSourceFrame frames[SM_FRAME_SLOTS];
+ static unsigned current;
++static inline unsigned next_slot(unsigned i) { return (i + 1) % SM_FRAME_SLOTS; }
++static inline unsigned prev_slot(unsigned i) { return (i + SM_FRAME_SLOTS - 1) % SM_FRAME_SLOTS; }
++/* Per-line VRAM sharing (snesrecomp-ps4). Copying all 64 KiB of VRAM into
++ * each of the 224 lines cost 14.7 MB of memcpy per frame, most of raster
++ * capture on the PS4's Jaguar. SNES VRAM is writable only in vblank or forced
++ * blank, so consecutive lines nearly always see the same VRAM: a line now
++ * copies VRAM only when the PPU's vramWriteCount (bumped by every VRAM write
++ * path: $2118/$2119, the 16-bit word store, a state load that changed VRAM)
++ * moved since the last copied line, and otherwise points at that copy. A
++ * moved count copies even when the bytes are equal, so the rule only errs
++ * toward copying. The table lives outside SmSourceFrame, so the capture file
++ * format is unchanged (shared lines are materialized before a save).
++ * SM_VRAM_VERIFY=1 re-checks every shared line against live VRAM. */
++static int16_t line_vram_idx[SM_FRAME_SLOTS][224];   /* 0 = own copy, k = line k-1's copy */
++static int owner_vram_line = -1;
++static uint32_t owner_vram_count;
++static inline const uint16_t *line_vram(const SmRasterLine *l) {
++  for (unsigned i = 0; i < SM_FRAME_SLOTS; ++i) {
++    const SmRasterLine *base = frames[i].lines;
++    if (l >= base && l < base + 224) {
++      int k = line_vram_idx[i][l - base];
++      return k ? base[k - 1].vram : l->vram;
++    }
++  }
++  return l->vram;
++}
++static void materialize_line_vram(unsigned index) {
++  SmSourceFrame *f = &frames[index];
++  for (unsigned y = 0; y < 224; ++y) {
++    int k = line_vram_idx[index][y];
++    if (k) memcpy(f->lines[y].vram, f->lines[k - 1].vram, sizeof(f->lines[y].vram));
++    line_vram_idx[index][y] = 0;
++  }
++}
+ static Ppu scanout;
+ static const uint8_t *renderer_rom;
+ static size_t renderer_rom_size;
+@@ -72,6 +117,7 @@ static bool save_capture(const SmSourceFrame *frame, const char *path) {
+   return fclose(file) == 0 && ok;
+ }
+ bool SmRendererSaveCapture(const char *path) {
++  materialize_line_vram(current);
+   return save_capture(&frames[current], path);
+ }
+ bool SmRendererLoadCapture(const char *path) {
+@@ -79,7 +125,7 @@ bool SmRendererLoadCapture(const char *path) {
+   FILE *file = fopen(path, "rb");
+   if (!file) return false;
+   uint32_t header[3];
+-  SmSourceFrame *next = &frames[current ^ 1];
++  SmSourceFrame *next = &frames[next_slot(current)];
+   const size_t v1_size = (offsetof(SmSourceFrame, object_ram) + 3) & ~(size_t)3;
+   bool ok = fread(header, sizeof(header), 1, file) == 1 &&
+             header[0] == 0x534d5243 &&
+@@ -94,7 +140,10 @@ bool SmRendererLoadCapture(const char *path) {
+     memcpy(next->object_ram, next->ram, sizeof(next->object_ram));
+     next->object_state_valid = false;
+   }
+-  if (ok) current ^= 1;
++  if (ok) {
++    memset(line_vram_idx[next_slot(current)], 0, sizeof(line_vram_idx[0]));
++    current = next_slot(current);
++  }
+   else next->valid = false;
+   return ok;
+ }
+@@ -258,8 +307,15 @@ static bool has_samus_motion(const SmSourceFrame *f, const SmSourceFrame *old) {
+   }
+   return false;
+ }
++#if defined(SRPS4)
++static void pipe_reset(void);
++#endif
+ void SmRendererReset(void) {
++#if defined(SRPS4)
++  pipe_reset();   /* the compose thread must not be reading frames[] */
++#endif
+   memset(frames, 0, sizeof(frames));
++  memset(line_vram_idx, 0, sizeof(line_vram_idx));
+   current = 0;
+   captured_mode7 = false;
+   captured_mosaic = false;
+@@ -274,11 +330,13 @@ void SmRendererReset(void) {
+   object_state_latched = false;
+ }
+ void SmRendererBeginFrame(const uint8_t ram[0x20000], unsigned number) {
+-  current ^= 1;
++  current = next_slot(current);
+   SmSourceFrame *f = &frames[current];
+   f->valid = false;
+   f->captured = 0;
+   f->number = number;
++  owner_vram_line = -1;
++  memset(line_vram_idx[current], 0, sizeof(line_vram_idx[0]));
+   memcpy(f->ram, ram, sizeof(f->ram));
+   memcpy(f->object_ram, object_state_latched ? latched_object_ram : ram, sizeof(f->object_ram));
+   /* The fallback copy is useful for discrete inspection, but is not the
+@@ -295,7 +353,22 @@ void SmRendererCaptureLine(const Ppu *p, unsigned line) {
+   memcpy(l->palette, p->cgram, sizeof(l->palette));
+   memcpy(l->oam, p->oam, sizeof(l->oam));
+   memcpy(l->high_oam, p->highOam, sizeof(l->high_oam));
+-  memcpy(l->vram, p->vram, sizeof(l->vram));
++  static int verify = -1;
++  if (verify < 0) { const char *v = getenv("SM_VRAM_VERIFY"); verify = v && *v == '1'; }
++  bool share = line != 1 && owner_vram_line >= 0 && p->vramWriteCount == owner_vram_count;
++  if (share && verify &&
++      memcmp(p->vram, f->lines[owner_vram_line].vram, sizeof(l->vram)) != 0) {
++    fprintf(stderr, "[sm] VRAM changed without a write count (line %u)\n", line);
++    share = false;
++  }
++  if (share) {
++    line_vram_idx[current][line - 1] = (int16_t)(owner_vram_line + 1);
++  } else {
++    memcpy(l->vram, p->vram, sizeof(l->vram));
++    owner_vram_line = (int)line - 1;
++    owner_vram_count = p->vramWriteCount;
++    line_vram_idx[current][line - 1] = 0;
++  }
+   ++f->captured;
+ }
+ bool SmRendererEndFrame(const uint32_t stock[256 * 224]) {
+@@ -305,7 +378,7 @@ bool SmRendererEndFrame(const uint32_t stock[256 * 224]) {
+   f->valid = true;
+   const char *motion_prefix = getenv("SM_CAPTURE_MOTION_PREFIX");
+   const char *motion_after = getenv("SM_CAPTURE_MOTION_AFTER");
+-  const SmSourceFrame *previous = &frames[current ^ 1];
++  const SmSourceFrame *previous = &frames[prev_slot(current)];
+   const char *rotation_prefix = getenv("SM_CAPTURE_ROTATION_PREFIX");
+   if (rotation_prefix && !captured_rotation && continuous_frames(previous, f) &&
+       room_state(read16(f->ram, 0x998)) && (read16(f->ram, 0x93f) & 0x8000)) {
+@@ -1192,7 +1265,7 @@ static void sprites(const Ppu *p, const SmRasterLine *line, int y,
+       int cx = attr & 0x4000 ? size - 1 - col : col;
+       unsigned tile = (((((attr & 255) >> 4) + row / 8) & 15) << 4) |
+                       (((attr & 15) + cx / 8) & 15);
+-      unsigned pixel = tile_pixel(line->vram, base + tile * 16, cx & 7, row & 7, 4);
++      unsigned pixel = tile_pixel(line_vram(line), base + tile * 16, cx & 7, row & 7, 4);
+       if (pixel) {
+         pixels[dest] = (priority << 12) | (layer << 8) | palette | pixel;
+         if (!native_footprint && recovered && dest >= viewport.extra && dest < viewport.extra + 256)
+@@ -1241,7 +1314,7 @@ static void enemy_map(const SmRasterLine *line, const Ppu *p,
+       int cx = attr & 0x4000 ? size - 1 - col : col;
+       unsigned tile = (((((attr & 255) >> 4) + row / 8) & 15) << 4) |
+                       (((attr & 15) + cx / 8) & 15);
+-      unsigned pixel = tile_pixel(line->vram, base + tile * 16, cx & 7, row & 7, 4);
++      unsigned pixel = tile_pixel(line_vram(line), base + tile * 16, cx & 7, row & 7, 4);
+       if (pixel)
+         pixels[dest] = ((((attr >> 12) & 3) * 4 + 2) << 12) |
+                        ((attr & 0x800 ? 4 : 6) << 8) |
+@@ -1442,7 +1515,7 @@ static void grapple_pixels(const SmRasterLine *line, const Ppu *p, int y,
+       int x = pieces[i].x + col, dest = x + viewport.extra;
+       bool native = x >= 0 && x < 256;
+       if ((native && !recover_native[i]) || dest < 0 || dest >= viewport.width) continue;
+-      unsigned pixel = tile_pixel(line->vram, base + (attr & 255) * 16, attr & 0x4000 ? 7 - col : col, row, 4);
++      unsigned pixel = tile_pixel(line_vram(line), base + (attr & 255) * 16, attr & 0x4000 ? 7 - col : col, row, 4);
+       if (pixel) {
+         pixels[dest] = (uint16_t)(((((attr >> 12) & 3) * 4 + 2) << 12) |
+                       ((attr & 0x800 ? 4 : 6) << 8) | 128 | (((attr >> 9) & 7) * 16) | pixel);
+@@ -1481,14 +1554,123 @@ static uint32_t colour(const Ppu *p, const uint16_t *palette, const uint8_t *bri
+   return result;
+ }
+ 
++
++/* ---- Per-pixel composition (snesrecomp-ps4) -----------------------------
++ * The sprite pass of each row is order-dependent and stays serial. Per-pixel
++ * composition reads only the row's recorded state below (register snapshot
++ * after scroll interpolation, background lines, objects, Mode 7 samples) and
++ * writes only that row of `out`, so rows run on snesrecomp's render worker
++ * pool. The pixel code is the former inline loop, unchanged. */
++typedef struct SmRowJob {
++  uint8_t registers[PPU_SAVESTATE_REGS_SIZE];
++  const uint16_t *palette, *vram;
++  SmBackgroundLine background[3];
++  uint8_t brightness[32];
++  const uint8_t *mode7;
++  const uint16_t *objects;
++  SmWideWindow wide;
++  SmMode7Line transform;
++  int mode, mode7_size, y, width, extra;
++} SmRowJob;
++static SmRowJob row_jobs[224];
++static bool row_jobs_active[224];
++static void compose_row_pixels(const SmRowJob *j, Ppu *p, uint32_t *out) {
++  memcpy(p, j->registers, PPU_SAVESTATE_REGS_SIZE);
++    for (int sx = 0; sx < j->width; ++sx) {
++      int x = sx - j->extra;
++      uint16_t screens[2] = {0x500, 0x500};
++      uint16_t backgrounds[3] = {0, 0, 0};
++      int layers = j->mode == 7 ? ((p->setini & 64) ? 2 : 1) : 3;
++      unsigned enabled = p->screenEnabled[0] | p->screenEnabled[1];
++      /* Tile addressing/decoding is identical on main and sub. Cache it
++       * before applying each screen's independent layer/window enables. */
++      for (int layer = 0; layer < layers; ++layer) {
++        if (!(enabled & (1u << layer))) continue;
++        if (j->mode == 7) {
++          unsigned index = j->mode7[sx];
++          if ((p->mosaic & (1u << layer)) && j->mode7_size > 1) {
++            int mx = x - ((x % j->mode7_size) + j->mode7_size) % j->mode7_size;
++            index = SmMode7Sample(&j->transform, j->vram, mx);
++          }
++          unsigned priority = 5;
++          if (layer == 1) {
++            priority = index & 128 ? 9 : 1;
++            index &= 127;
++          }
++          backgrounds[layer] = index ? (priority << 12) | (layer << 8) | index : 0;
++        } else {
++          int sample_x = x, sample_y = j->y + 1;
++          if (p->mosaic & (1u << layer)) {
++            int size = (p->mosaic >> 4) + 1;
++            /* Mosaic precedes scroll and tile lookup, independently per BG.
++             * Floor division extends the native X=0 grid into negative X;
++             * C's truncating remainder would shift blocks in the left margin. */
++            sample_x -= ((sample_x % size) + size) % size;
++            sample_y -= sample_y % size;
++          }
++          bool margin = sample_x < 0 || sample_x >= 256;
++          backgrounds[layer] = background_pixel(&j->background[layer], j->vram,
++                                                 sample_x, sample_y, margin);
++        }
++      }
++      for (int sub = 0; sub < 2; ++sub) {
++        for (int layer = 0; layer < layers; ++layer) {
++          if (!(p->screenEnabled[sub] & (1u << layer))) continue;
++          if ((p->screenWindowed[sub] & (1u << layer)) &&
++              in_window(p, layer, x, j->extra, &j->wide)) continue;
++          if (backgrounds[layer] > screens[sub]) screens[sub] = backgrounds[layer];
++        }
++        if ((p->screenEnabled[sub] & 16) &&
++            (!(p->screenWindowed[sub] & 16) ||
++             !in_window(p, 4, x, j->extra, &j->wide)) &&
++            j->objects[sx] > screens[sub]) screens[sub] = j->objects[sx];
++      }
++      out[sx] = colour(p, j->palette, j->brightness, screens[0], screens[1],
++                                            in_window(p, 5, x, j->extra, &j->wide));
++    }
++}
++static uint32_t *compose_out;
++static int compose_width;
++static Ppu *compose_ppu[64];
++static void compose_range(void *context, size_t begin, size_t end, unsigned slot) {
++  (void)context;
++  if (slot >= 64) slot = 63;
++  if (!compose_ppu[slot]) compose_ppu[slot] = calloc(1, sizeof(Ppu));
++  Ppu *p = compose_ppu[slot] ? compose_ppu[slot] : &scanout;
++  for (size_t y = begin; y < end; ++y)
++    if (row_jobs_active[y]) compose_row_pixels(&row_jobs[y], p, compose_out + y * compose_width);
++}
++static void compose_rows(uint32_t *out, int width) {
++  compose_out = out; compose_width = width;
++#if defined(SM_RENDER_PARALLEL) && SM_RENDER_PARALLEL
++  static bool tried;
++  static SnesRenderWorkers *pool;
++  if (!tried) { tried = true; pool = SnesRenderWorkersCreate(0); }
++  if (pool && SnesRenderWorkersRun(pool, 224, 8, compose_range, NULL)) return;
++#endif
++  compose_range(NULL, 0, 224, 0);
++}
++#include <time.h>
++static double sm_now(void) {
++  struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
++  return ts.tv_sec + ts.tv_nsec * 1e-9;
++}
++static double draw_started;
++static bool draw_slot(unsigned slot, uint32_t *out, SmViewport viewport, bool hud_anchored,
++                      double alpha);
+ bool SmRendererDraw(uint32_t *out, SmViewport viewport, bool hud_anchored, double alpha) {
++  return draw_slot(current, out, viewport, hud_anchored, alpha);
++}
++static bool draw_slot(unsigned slot, uint32_t *out, SmViewport viewport, bool hud_anchored,
++                      double alpha) {
++  draw_started = sm_now();
+   memset(grapple_motion, 0, sizeof(grapple_motion));
+   memset(&render_stats, 0, sizeof(render_stats));
+   memset(object_matches, 0, sizeof(object_matches));
+   memset(samus_matches, 0, sizeof(samus_matches));
+   memset(enemy_matches, 0, sizeof(enemy_matches));
+-  const SmSourceFrame *f = &frames[current];
+-  const SmSourceFrame *previous = &frames[current ^ 1];
++  const SmSourceFrame *f = &frames[slot];
++  const SmSourceFrame *previous = &frames[prev_slot(slot)];
+   if (!isfinite(alpha)) alpha = 1;
+   if (alpha < 0) alpha = 0;
+   if (alpha > 1) alpha = 1;
+@@ -1498,9 +1680,12 @@ bool SmRendererDraw(uint32_t *out, SmViewport viewport, bool hud_anchored, doubl
+   memset(out, 0, (size_t)viewport.width * 224 * sizeof(*out));
+   unsigned state = read16(f->ram, 0x998);
+   bool room = room_state(state);
+-  uint16_t objects[SM_MAX_WIDTH];
+-  uint8_t mode7_pixels[SM_MAX_WIDTH];
+-  SmWideWindow wide_windows[224];
++  /* Per-row buffers: the sprite pass fills row y's, and the per-pixel
++   * composition of every row runs afterwards, possibly in parallel. */
++  static uint16_t row_objects[224][SM_MAX_WIDTH];
++  static uint8_t row_mode7[224][SM_MAX_WIDTH];
++  static SmWideWindow wide_windows[224];
++  memset(row_jobs_active, 0, sizeof(row_jobs_active));
+   power_bomb_windows(f, wide_windows);
+   bool xray = xray_windows(f, wide_windows);
+   bool xray_reveal = xray && SmRendererXrayBlocks(f->ram, xray_blocks);
+@@ -1602,6 +1787,8 @@ bool SmRendererDraw(uint32_t *out, SmViewport viewport, bool hud_anchored, doubl
+   }
+   for (int y = 0; y < 224; ++y) {
+     const SmRasterLine *l = &f->lines[y];
++    uint16_t *objects = row_objects[y];
++    uint8_t *mode7_pixels = row_mode7[y];
+     memcpy(&scanout, l->registers, PPU_SAVESTATE_REGS_SIZE);
+     uint8_t brightness[32];
+     for (unsigned c = 0; c < 32; ++c)
+@@ -1698,59 +1885,190 @@ bool SmRendererDraw(uint32_t *out, SmViewport viewport, bool hud_anchored, doubl
+       enemy_map(l, &scanout, flare.bank, flare.map, flare.x, flare.y, 0, 0, y, viewport, objects);
+     if (mode == 7)
+       for (int sx = 0; sx < viewport.width; ++sx)
+-        mode7_pixels[sx] = SmMode7Sample(&transform, l->vram, sx - viewport.extra);
+-    for (int sx = 0; sx < viewport.width; ++sx) {
+-      int x = sx - viewport.extra;
+-      uint16_t screens[2] = {0x500, 0x500};
+-      uint16_t backgrounds[3] = {0, 0, 0};
+-      int layers = mode == 7 ? ((scanout.setini & 64) ? 2 : 1) : 3;
+-      unsigned enabled = scanout.screenEnabled[0] | scanout.screenEnabled[1];
+-      /* Tile addressing/decoding is identical on main and sub. Cache it
+-       * before applying each screen's independent layer/window enables. */
+-      for (int layer = 0; layer < layers; ++layer) {
+-        if (!(enabled & (1u << layer))) continue;
+-        if (mode == 7) {
+-          unsigned index = mode7_pixels[sx];
+-          if ((scanout.mosaic & (1u << layer)) && mode7_size > 1) {
+-            int mx = x - ((x % mode7_size) + mode7_size) % mode7_size;
+-            index = SmMode7Sample(&transform, l->vram, mx);
+-          }
+-          unsigned priority = 5;
+-          if (layer == 1) {
+-            priority = index & 128 ? 9 : 1;
+-            index &= 127;
+-          }
+-          backgrounds[layer] = index ? (priority << 12) | (layer << 8) | index : 0;
+-        } else {
+-          int sample_x = x, sample_y = y + 1;
+-          if (scanout.mosaic & (1u << layer)) {
+-            int size = (scanout.mosaic >> 4) + 1;
+-            /* Mosaic precedes scroll and tile lookup, independently per BG.
+-             * Floor division extends the native X=0 grid into negative X;
+-             * C's truncating remainder would shift blocks in the left margin. */
+-            sample_x -= ((sample_x % size) + size) % size;
+-            sample_y -= sample_y % size;
+-          }
+-          bool margin = sample_x < 0 || sample_x >= 256;
+-          backgrounds[layer] = background_pixel(&background_lines[layer], l->vram,
+-                                                 sample_x, sample_y, margin);
+-        }
+-      }
+-      for (int sub = 0; sub < 2; ++sub) {
+-        for (int layer = 0; layer < layers; ++layer) {
+-          if (!(scanout.screenEnabled[sub] & (1u << layer))) continue;
+-          if ((scanout.screenWindowed[sub] & (1u << layer)) &&
+-              in_window(&scanout, layer, x, viewport.extra, &wide_windows[y])) continue;
+-          if (backgrounds[layer] > screens[sub]) screens[sub] = backgrounds[layer];
+-        }
+-        if ((scanout.screenEnabled[sub] & 16) &&
+-            (!(scanout.screenWindowed[sub] & 16) ||
+-             !in_window(&scanout, 4, x, viewport.extra, &wide_windows[y])) &&
+-            objects[sx] > screens[sub]) screens[sub] = objects[sx];
++        mode7_pixels[sx] = SmMode7Sample(&transform, line_vram(l), sx - viewport.extra);
++    {
++      SmRowJob *j = &row_jobs[y];
++      memcpy(j->registers, &scanout, PPU_SAVESTATE_REGS_SIZE);
++      j->palette = l->palette; j->vram = line_vram(l);
++      memcpy(j->background, background_lines, sizeof(j->background));
++      memcpy(j->brightness, brightness, sizeof(j->brightness));
++      j->mode7 = mode7_pixels; j->objects = objects; j->wide = wide_windows[y];
++      j->transform = transform; j->mode = mode; j->mode7_size = mode7_size;
++      j->y = y; j->width = viewport.width; j->extra = viewport.extra;
++      row_jobs_active[y] = true;
++    }
++  }
++  {
++    /* SM_DRAW_PHASES=1: serial (prologue + sprite pass) versus per-pixel
++     * composition time, averaged over 600 draws, into the log. */
++    static int phases = -1;
++    static double serial_sum, pixel_sum; static unsigned draws;
++    if (phases < 0) { const char *v = getenv("SM_DRAW_PHASES"); phases = v && *v == '1'; }
++    double t1 = phases ? sm_now() : 0;
++    compose_rows(out, viewport.width);
++    if (phases) {
++      double t2 = sm_now();
++      serial_sum += t1 - draw_started; pixel_sum += t2 - t1;
++      if (++draws == 600) {
++        fprintf(stderr, "[sm draw] serial_ms=%.3f pixels_ms=%.3f (mean of 600)\n",
++                serial_sum * 1e3 / 600, pixel_sum * 1e3 / 600);
++        draws = 0; serial_sum = pixel_sum = 0;
+       }
+-      out[y * viewport.width + sx] = colour(&scanout, l->palette, brightness, screens[0], screens[1],
+-                                            in_window(&scanout, 5, x, viewport.extra, &wide_windows[y]));
+     }
+   }
+   return true;
+ }
++
++#if defined(SRPS4)
++/* ---- Pipelined compose (snesrecomp-ps4) ---------------------------------
++ * The widescreen compose of frame N runs on its own thread while the main
++ * thread emulates and captures frame N+1; a present shows exactly frame N-1.
++ * Per-frame cost on the main thread becomes guest + capture, for one frame
++ * of added latency (same design as the Mega Man X port).
++ *
++ * Safety: capture writes only slot `current` of frames[] (plus its own
++ * latch/owner bookkeeping); the compose of slot k reads slots k and k-1 and
++ * otherwise only draw-side statics. Submit waits for the compose thread to go
++ * idle before posting, so capture of N+1 (slot k+1) can never overlap a draw
++ * that reads it, and slot k+2 == k-1 is reused only after compose(k) ended.
++ * Interpolated presentation (alpha < 1) is a desktop feature; the console
++ * presents in lockstep, so a pipelined draw always uses alpha = 1. */
++#include <pthread.h>
++void srps4_pin_current_thread(unsigned core);
++static struct {
++  bool started, failed, busy, fresh;
++  pthread_t thread;
++  pthread_mutex_t lock;
++  pthread_cond_t job_ready, job_done;
++  unsigned slot_in;            /* frames[] slot to draw */
++  SmViewport viewport; bool hud;
++  unsigned out_slot;
++  uint32_t out[2][SM_MAX_WIDTH * SM_HEIGHT];
++  int width[2];
++  int completed, previous;
++  uint32_t field[256 * 224];
++  int profile;
++  unsigned stat_jobs;
++  double stat_compose, stat_compose_max, stat_wait, stat_wait_max;
++} pipe = {.completed = -1, .previous = -1, .profile = -1};
++
++static void *pipe_main(void *unused) {
++  (void)unused;
++  const char *pin = getenv("SNESRECOMP_RENDER_PIN");
++  if (!(pin && *pin == '0')) srps4_pin_current_thread(5);
++  pthread_mutex_lock(&pipe.lock);
++  for (;;) {
++    while (!pipe.busy) pthread_cond_wait(&pipe.job_ready, &pipe.lock);
++    unsigned slot = pipe.slot_in, out_slot = pipe.out_slot;
++    SmViewport vp = pipe.viewport; bool hud = pipe.hud;
++    pthread_mutex_unlock(&pipe.lock);
++    double t0 = pipe.profile ? sm_now() : 0;
++    uint32_t *out = pipe.out[out_slot];
++    if (!draw_slot(slot, out, vp, hud, 1.0)) {
++      memset(out, 0, (size_t)vp.width * SM_HEIGHT * sizeof(*out));
++      for (int y = 0; y < SM_HEIGHT; ++y)
++        memcpy(out + y * vp.width + vp.extra, pipe.field + y * 256, 256 * 4);
++    }
++    double took = pipe.profile ? sm_now() - t0 : 0;
++    pthread_mutex_lock(&pipe.lock);
++    pipe.stat_compose += took;
++    if (took > pipe.stat_compose_max) pipe.stat_compose_max = took;
++    pipe.width[out_slot] = vp.width;
++    pipe.completed = (int)out_slot;
++    pipe.busy = false;
++    pthread_cond_broadcast(&pipe.job_done);
++  }
++  return NULL;
++}
++bool SmRendererPipelineEnabled(void) {
++  static int enabled = -1;
++  if (enabled < 0) {
++    const char *v = getenv("SM_RENDER_PIPELINE");
++#if SRPS4_CONSOLE
++    enabled = !(v && *v == '0');
++#else
++    enabled = v && *v && *v != '0';
++#endif
++  }
++  return enabled && !pipe.failed;
++}
++static bool pipe_start(void) {
++  if (pipe.started) return !pipe.failed;
++  pipe.started = true;
++  if (pthread_mutex_init(&pipe.lock, NULL) || pthread_cond_init(&pipe.job_ready, NULL) ||
++      pthread_cond_init(&pipe.job_done, NULL) ||
++      pthread_create(&pipe.thread, NULL, pipe_main, NULL)) {
++    pipe.failed = true;
++    fprintf(stderr, "[sm] pipelined compose unavailable; composing on the main thread\n");
++    return false;
++  }
++  fprintf(stderr, "[sm] pipelined compose enabled\n");
++  return true;
++}
++static void pipe_wait_idle_locked(void) {
++  while (pipe.busy) pthread_cond_wait(&pipe.job_done, &pipe.lock);
++}
++static void pipe_reset(void) {
++  if (!pipe.started || pipe.failed) return;
++  pthread_mutex_lock(&pipe.lock);
++  pipe_wait_idle_locked();
++  pipe.completed = pipe.previous = -1;
++  pipe.fresh = false;
++  pthread_mutex_unlock(&pipe.lock);
++}
++void SmRendererPipelineForget(void) { pipe_reset(); }
++void SmRendererPipelineSubmit(SmViewport viewport, bool hud_anchored, const uint32_t *field) {
++  if (!pipe_start()) return;
++  if (pipe.profile < 0) {
++    const char *v = getenv("SNESRECOMP_HOST_PROFILE");
++    pipe.profile = v && *v && *v != '0';
++  }
++  double t0 = pipe.profile ? sm_now() : 0;
++  pthread_mutex_lock(&pipe.lock);
++  pipe_wait_idle_locked();
++  if (pipe.profile) {
++    double w = sm_now() - t0;
++    pipe.stat_wait += w;
++    if (w > pipe.stat_wait_max) pipe.stat_wait_max = w;
++    if (++pipe.stat_jobs == 600) {
++      fprintf(stderr, "[sm pipe] jobs=600 compose_ms/job=%.3f max=%.3f | submit_wait_ms=%.3f max=%.3f\n",
++              pipe.stat_compose * 1e3 / 600, pipe.stat_compose_max * 1e3,
++              pipe.stat_wait * 1e3 / 600, pipe.stat_wait_max * 1e3);
++      pipe.stat_jobs = 0;
++      pipe.stat_compose = pipe.stat_compose_max = pipe.stat_wait = pipe.stat_wait_max = 0;
++    }
++  }
++  if (field) memcpy(pipe.field, field, sizeof(pipe.field));
++  else memset(pipe.field, 0, sizeof(pipe.field));
++  pipe.slot_in = current;
++  pipe.viewport = viewport; pipe.hud = hud_anchored;
++  pipe.previous = pipe.completed;
++  pipe.out_slot = pipe.previous == 0 ? 1u : 0u;
++  pipe.busy = true;
++  pipe.fresh = true;
++  pthread_cond_signal(&pipe.job_ready);
++  pthread_mutex_unlock(&pipe.lock);
++}
++const uint32_t *SmRendererPipelineLatest(int *width) {
++  if (!pipe.started || pipe.failed) return NULL;
++  pthread_mutex_lock(&pipe.lock);
++  int slot;
++  if (pipe.fresh && pipe.previous >= 0) {
++    slot = pipe.previous;            /* exactly frame N-1: no judder */
++  } else {
++    pipe_wait_idle_locked();         /* nothing new captured (pause, menus) */
++    slot = pipe.completed;
++  }
++  pipe.fresh = false;
++  const uint32_t *out = slot >= 0 ? pipe.out[slot] : NULL;
++  if (out && width) *width = pipe.width[slot];
++  pthread_mutex_unlock(&pipe.lock);
++  return out;
++}
++void SmRendererPipelineDrain(void) {
++  if (!pipe.started || pipe.failed) return;
++  pthread_mutex_lock(&pipe.lock);
++  pipe_wait_idle_locked();
++  pthread_mutex_unlock(&pipe.lock);
++}
++#endif
+diff --git a/src/sm_renderer.h b/src/sm_renderer.h
+index 87782c3..6fa6ff6 100644
+--- a/src/sm_renderer.h
++++ b/src/sm_renderer.h
+@@ -48,3 +48,11 @@ typedef struct SmRendererStats {
+   unsigned grapple_flare_native_matches;
+ } SmRendererStats;
+ SmRendererStats SmRendererGetStats(void);
++#if defined(SRPS4)
++/* snesrecomp-ps4: pipelined widescreen compose (see sm_renderer.c). */
++bool SmRendererPipelineEnabled(void);
++void SmRendererPipelineSubmit(SmViewport viewport, bool hud_anchored, const uint32_t *field);
++const uint32_t *SmRendererPipelineLatest(int *width);
++void SmRendererPipelineForget(void);
++void SmRendererPipelineDrain(void);
++#endif

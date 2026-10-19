@@ -1,0 +1,3 @@
+# Package defaults applied before /data/<Title>/srps4_env.txt (which wins).
+SNESRECOMP_WIDESCREEN=1
+SM_VIDEO_ASPECT=16:9
