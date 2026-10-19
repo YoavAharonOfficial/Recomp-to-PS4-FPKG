@@ -86,11 +86,18 @@ function(srps4_package target)
             COMMENT "Staging the package payload for the native smoke test" VERBATIM)
         return()
     endif()
+    # Program authority ID + auth info exactly as PacBrew's ps4.cmake add_self()
+    # signs its apps. create-fself's defaults (paid 0x...11, no authinfo) give
+    # a process that cannot map system flexible memory: the mini-app malloc
+    # crashed before main and Piglet's eglGetDisplay() returned EGL_NO_DISPLAY.
+    set(SRPS4_PAID "0x3800000000000035")
+    set(SRPS4_AUTHINFO "000000000000000000000000001C004000FF000000000080000000000000000000000000000000000000008000400040000000000000008000000000000000080040FFFF000000F000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000")
     list(APPEND cmds
         COMMAND ${CMAKE_COMMAND} -E make_directory "${stage}/sce_sys/about" "${stage}/sce_module"
-        COMMAND "${sdk}/bin/create-fself" "-in=$<TARGET_FILE:${target}>"
+        COMMAND ${CMAKE_COMMAND} -E env "OO_PS4_TOOLCHAIN=${sdk}"
+                "${sdk}/bin/create-fself" "-in=$<TARGET_FILE:${target}>"
                 "-out=${CMAKE_BINARY_DIR}/${target}.oelf" "--eboot" "${stage}/eboot.bin"
-                "--paid" "0x3800000000000011"
+                "--paid" "${SRPS4_PAID}" "--authinfo" "${SRPS4_AUTHINFO}"
         COMMAND ${CMAKE_COMMAND} -E copy "${sdk}/bin/data/modules/libc.prx" "${stage}/sce_module/libc.prx"
         COMMAND ${CMAKE_COMMAND} -E copy "${sdk}/bin/data/modules/libSceFios2.prx" "${stage}/sce_module/libSceFios2.prx"
         COMMAND ${CMAKE_COMMAND} -E copy "${sdk}/bin/data/modules/right.sprx" "${stage}/sce_sys/about/right.sprx"

@@ -1,0 +1,40 @@
+diff --git a/src/video/ps4/SDL_ps4piglet.c b/src/video/ps4/SDL_ps4piglet.c
+index 17016e3c..62e8f8ca 100644
+--- a/src/video/ps4/SDL_ps4piglet.c
++++ b/src/video/ps4/SDL_ps4piglet.c
+@@ -192,7 +192,10 @@ int PS4_PigletInit() {
+         return 1;
+     }
+ 
+-    SDL_Log("PS4_PigletInit: Ok\n");
++    SDL_Log("PS4_PigletInit: Ok (flags=0x%x sys=%u MiB video=%u MiB)\n",
++            (unsigned) ps4_pgl_config.flags,
++            (unsigned) (ps4_pgl_config.systemSharedMemorySize >> 20),
++            (unsigned) (ps4_pgl_config.videoSharedMemorySize >> 20));
+ 
+     return 0;
+ }
+diff --git a/src/video/ps4/SDL_ps4video.c b/src/video/ps4/SDL_ps4video.c
+index 47b93aa8..7f7eb6a3 100644
+--- a/src/video/ps4/SDL_ps4video.c
++++ b/src/video/ps4/SDL_ps4video.c
+@@ -20,6 +20,7 @@
+ */
+ 
+ #include "../../SDL_internal.h"
++#include <stdio.h>
+ 
+ #if SDL_VIDEO_DRIVER_PS4
+ 
+@@ -51,7 +52,10 @@ char log_buffer[1024];
+ static void *
+ PS4_logCb(void *userdata, int category, SDL_LogPriority priority, const char *message) {
+     snprintf(log_buffer, 1023, "<SDL2> %s\n", message);
+-    sceKernelDebugOutText(0, log_buffer);
++    /* stdio, not sceKernelDebugOutText directly: the host captures stderr
++     * into its log file and mirrors it to klog, so SDL's PS4 bring-up
++     * messages land in both places. */
++    fputs(log_buffer, stderr);
+     return NULL;
+ }
+ 
