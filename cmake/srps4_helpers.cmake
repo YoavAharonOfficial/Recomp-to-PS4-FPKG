@@ -40,6 +40,21 @@ function(srps4_add_host target)
         SRPS4_GAME_ENTRY=${H_ENTRY}
         SRPS4_DATA_DIR="${H_DATA_DIR}"
         SRPS4_TITLE="${H_TITLE}")
+    # Profile-guided optimization (scripts/pgo_train.sh). The console's clang
+    # is clang 18, so a profile recorded by a native clang-18 build of the
+    # same sources applies; functions that differ between the two builds
+    # (SRPS4_CONSOLE branches) are simply compiled without profile data.
+    set(SRPS4_PGO_PROFILE "${SRPS4_PROFILE_DIR}/pgo.profdata" CACHE FILEPATH
+        "PGO profile for the console build (empty or missing = no PGO)")
+    if(SRPS4_TARGET_PS4 AND SRPS4_PGO_PROFILE AND EXISTS "${SRPS4_PGO_PROFILE}")
+        message(STATUS "srps4: PGO profile ${SRPS4_PGO_PROFILE}")
+        set(_pgo "-fprofile-instr-use=${SRPS4_PGO_PROFILE}" -Wno-profile-instr-unprofiled
+                 -Wno-profile-instr-out-of-date -Wno-profile-instr-missing)
+        target_compile_options(${target} PRIVATE ${_pgo})
+        if(TARGET snesrecomp_render_workers)
+            target_compile_options(snesrecomp_render_workers PRIVATE ${_pgo})
+        endif()
+    endif()
     if(SRPS4_TARGET_PS4)
         # Jaguar (btver2) codegen: AVX/SSE4.2/BMI, tuned for the console CPU.
         target_compile_options(${target} PRIVATE -march=btver2 -O2)
