@@ -93,3 +93,21 @@ Delete the file to return to the defaults.
 - Netplay is not built.
 - MSU-1 audio, Zero and X2/X3 weapon mods need extra files or ROMs. They
   are left off.
+
+## Super Metroid (converted with `scripts/srps4_convert.py`)
+
+Install `IV0000-SMTR00001_00-SUPERMETROIDRCMP.pkg` the same way. Its data
+directory is `/data/SuperMetroid/`, and the log is `logs/last_run.txt`.
+
+- **Widescreen** is on at 16:9 with the HUD anchored to the screen edges.
+  The settings are in `/data/SuperMetroid/sm-video.ini` (`EnhancedRenderer`,
+  `Aspect`, `HudAnchored`). Setting `EnhancedRenderer=0` gives the original
+  4:3 picture.
+- **Pipelined compose** is on by default on the console.
+  `SM_RENDER_PIPELINE=0` in `/data/SuperMetroid/srps4_env.txt` composes on the
+  main thread again.
+- **Profiling:** add `SNESRECOMP_HOST_PROFILE=1` and
+  `SNESRECOMP_RUN_FRAMES=3600` to `srps4_env.txt`. The log then gets the
+  `stage=` summary and a `[sm pipe]` line every 600 frames, the same as for
+  Mega Man X.
+- **Saves** are battery SRAM in `/data/SuperMetroid/saves/save.srm`.

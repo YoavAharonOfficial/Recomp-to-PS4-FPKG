@@ -1,3 +1,5 @@
 # Package defaults applied before /data/<Title>/srps4_env.txt (which wins).
-SNESRECOMP_WIDESCREEN=1
-SM_VIDEO_ASPECT=16:9
+# Super Metroid's widescreen is set by defaults/sm-video.ini instead of the
+# converter's generic SNESRECOMP_WIDESCREEN=1 / SM_VIDEO_ASPECT=16:9: those
+# environment switches override the ini, so a player who sets
+# EnhancedRenderer=0 there would be ignored.
