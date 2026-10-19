@@ -69,9 +69,12 @@ applied before the game starts, and each one is echoed to klog. Useful keys:
 
 ```
 SNESRECOMP_RENDER_WORKERS=1       # widescreen composition on one core (original path)
-SNESRECOMP_RENDER_WORKERS=4       # caller + 3 workers (the console default)
+SNESRECOMP_RENDER_WORKERS=5       # caller + 4 workers (the console default)
+MMX_RENDER_PIPELINE=0             # compose on the main thread again (no added frame of latency)
+SNESRECOMP_RENDER_PIN=0           # leave every thread unpinned
 SNESRECOMP_OSD_FPS=1              # on-screen FPS counter
-SNESRECOMP_HOST_PROFILE=1         # per-frame timing breakdown into the log
+SNESRECOMP_HOST_PROFILE=1         # timing breakdown + per-worker stats into the log
+SNESRECOMP_RUN_FRAMES=3600        # quit after N frames (writes the profile summary)
 ```
 
 Delete the file to return to the defaults.

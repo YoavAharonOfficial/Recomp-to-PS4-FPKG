@@ -109,15 +109,53 @@ output itself.
    is now memoized per snapshot.
 2. **Parallel composition.** Each row's sprite pass is order-dependent and
    stays serial. Per-pixel composition (BG layers, windows, color math) then
-   runs on snesrecomp's render worker pool: the caller plus 3 workers on PS4.
-   The background caches it reads are filled eagerly beforehand. The boss-door
-   memo publishes only final values. `SNESRECOMP_RENDER_WORKERS=1` restores the
-   serial path.
+   runs on snesrecomp's render worker pool: the caller plus 4 workers on PS4,
+   each pinned to its own core. The background caches it reads are filled
+   eagerly beforehand. The boss-door memo publishes only final values.
+   `SNESRECOMP_RENDER_WORKERS=1` restores the serial path.
+3. **Shared per-line VRAM.** Capture used to copy all 64 KiB of VRAM into
+   each of the 224 line records, 14.7 MB of `memcpy` per frame. SNES VRAM is
+   only writable in vblank or forced blank, so a line now copies VRAM only
+   when an exact comparison against the last copied line differs.
+4. **Pipelined compose.** Console profiling (Jaguar, widescreen) measured
+   guest 4.5 ms, capture 5.9 ms and compose 11.9 ms per frame. That is about
+   22 ms, past the 16.7 ms vsync window, so the game locked to 30 fps and
+   ran in slow motion. Compose of frame N now runs on its own thread (core 5)
+   while the main thread (core 0) emulates and captures frame N+1. Per-frame
+   cost becomes roughly max(guest + capture, compose), for one frame of
+   added latency.
+   - Capture-written state lives in a `RenderWorld`. World 0 belongs to
+     capture, world 1 to compose, and a thread-local pointer plus macros
+     select it, so the renderer's code is unchanged.
+   - At each frame end the main thread waits for the compose thread to be
+     idle, then copies world 0 into world 1. The copy is about 1 MB, because
+     VRAM is shared by index.
+   - A present always shows exactly frame N-1, never whichever frame
+     happens to be done, so compose timing cannot cause judder.
+   - `MMX_RENDER_PIPELINE=0` turns the pipeline off.
+   - The thread-local world pointer is zero-initialized, with NULL meaning
+     world 0. A non-zero initializer puts a `R_X86_64_RELATIVE` relocation
+     into the TLS template, and the PS4 loader does not apply it before
+     copying the template into threads, so every thread starts with a raw
+     link-time address. Native Linux hides this, because its loader applies
+     the relocation. The emulator exposed it.
 
-Verification: presented-frame CRC32s are identical for the unpatched
-renderer, the serial path and 2 workers. That covers a 2,789-frame intro
-script, plus a 9,887-frame random-input Highway run comparing serial against
-parallel.
+Verification: presented-frame CRC32s are identical to the unmodified
+renderer across the intro (2,788 frames), random-input Highway play (17,869)
+and Boss Rush (9,886). With pipelining on, every present matches the
+baseline exactly one frame later. A ThreadSanitizer build of the native port
+was run with the pipeline on through boot plus Highway gameplay, and through
+Boss Rush. It reported no races in the port's code; its only reports are
+inside Mesa's llvmpipe, which the console does not use.
+
+### SDK fix: clock ids
+
+musl's `CLOCK_MONOTONIC` is Linux's id 1. On FreeBSD, and so on the PS4,
+id 1 is `CLOCK_VIRTUAL`, which is process CPU time. Every "monotonic" timer
+ran fast during parallel work and stopped while the process slept.
+`src/srps4_time.c` wraps `clock_gettime` and maps the ids. The host's frame
+pacer was never affected, because it uses `gettimeofday` through SDL.
+
 
 ## Building
 

@@ -1,3 +1,51 @@
+diff --git a/src/main.c b/src/main.c
+index 75a0ae0..9bcac9f 100644
+--- a/src/main.c
++++ b/src/main.c
+@@ -120,12 +120,23 @@ static void MmxBeginFrame(unsigned number) {
+   MmxRendererCoopFrame(MmxCoopEnabled() ? &coop : NULL);
+ }
+ static void MmxEndFrame(const uint8_t *field, unsigned number) {
++#if defined(SRPS4)
++  if (!g_mmx_custom_renderer && MmxRendererPipelineEnabled()) MmxRendererPipelineForget();
++#endif
+   if (!g_mmx_custom_renderer) return;
+   s_render_valid = MmxRendererEndFrame((const uint32_t *)field);
+   const char *capture = getenv("MMX_RENDER_CAPTURE");
+   const char *after = getenv("MMX_RENDER_CAPTURE_FRAME");
+   if (capture && number == (unsigned)(after ? atoi(after) : 1))
+     MmxRendererSaveCapture(capture);
++#if defined(SRPS4)
++  /* Compose this frame on the pipeline thread while the next one runs. */
++  /* Frames the host will not present (turbo skips 15 of 16) are not
++   * composed, exactly as before; the next presented frame submits. */
++  if (MmxRendererPipelineEnabled() && !g_snes->disableRender)
++    MmxRendererPipelineSubmit(g_mmx_custom_view, g_mmx_custom_hud, s_render_valid,
++                              (const uint32_t *)field);
++#endif
+ }
+ static int MmxDrawFrame(uint8_t *dst, size_t pitch, const uint8_t *field,
+                         int w, int h, double alpha) {
+@@ -138,6 +149,19 @@ static int MmxDrawFrame(uint8_t *dst, size_t pitch, const uint8_t *field,
+     RtlWidescreenPresent(dst, pitch, (const uint8_t *)output, w, h);
+     return 1;
+   }
++#if defined(SRPS4)
++  if (MmxRendererPipelineEnabled()) {
++    int composed_width = 0;
++    const uint32_t *composed = MmxRendererPipelineLatest(&composed_width);
++    if (composed && composed_width == w && h == 224) {
++      RtlWidescreenPresent(dst, pitch, (const uint8_t *)composed, w, h);
++      return 1;
++    }
++    /* No usable composition yet (first frame, view change): compose here,
++     * after the pipeline thread is idle so the two never share scratch. */
++    MmxRendererPipelineDrain();
++  }
++#endif
+   if (!s_render_valid || !MmxRendererDraw(output, g_mmx_custom_view, g_mmx_custom_hud)) {
+     memset(output, 0, (size_t)w * h * sizeof(*output));
+     for (int y = 0; y < h; ++y)
 diff --git a/src/mmx_render_assets.c b/src/mmx_render_assets.c
 index 97e4ca5..bfe807b 100644
 --- a/src/mmx_render_assets.c
@@ -79,13 +127,102 @@ index a7db476..2ab14e6 100644
  /* Explicit ROM resource binding for presentation-only dormant actor art. */
  const MmxSpriteAsset *MmxRenderAssetsResource(unsigned stage, unsigned section, unsigned resource);
 diff --git a/src/mmx_renderer.c b/src/mmx_renderer.c
-index 59dcfdf..05c050a 100644
+index 59dcfdf..a01c886 100644
 --- a/src/mmx_renderer.c
 +++ b/src/mmx_renderer.c
-@@ -43,6 +43,46 @@ typedef struct Frame {
+@@ -19,8 +19,6 @@ typedef struct Raster {
+   uint16_t palette[256], oam[256], vram[0x8000];
+   uint8_t high_oam[32];
+ } Raster;
+-static MmxBossRushState frame_rush;
+-static MmxBossRushVisualState frame_rush_visual;
+ typedef struct Piece {
+   int16_t x, y; uint16_t attr; uint8_t size, animation;
+   /* Palette occupies bits 1..3; the five spare bits retain charged-shot
+@@ -42,35 +40,135 @@ typedef struct Frame {
+   unsigned expanded_count;
    bool expand;
  } Frame;
- static Frame frame;
+-static Frame frame;
+-
++/* ---- Render worlds (snesrecomp-ps4 pipelined compose) -----------------
++ * Everything the capture side writes and the compose side reads lives in a
++ * RenderWorld. Two exist: world 0 is the live capture world (main thread:
++ * guest hooks, BeginFrame, CaptureLine, EndFrame); world 1 is the snapshot
++ * a compose of frame N reads while the main thread already captures N+1.
++ * A thread-local pointer selects the world, and the macros below keep every
++ * existing reference (frame.lines[y], frame_zero.slash, ...) unchanged. With
++ * pipelining off, every thread stays on world 0 and nothing differs from the
++ * original single-world renderer. */
++enum { MAX_WORLD_SPRITES = 8 };
++enum { MAX_DEBUG_RECTS = 64 };
+ typedef struct PilotOverlayAlignment {
+   bool evaluated;
+   bool valid;
+   int dx;
+   int dy;
+ } PilotOverlayAlignment;
++typedef struct RenderWorld {
++  Frame frame;
++  /* Per-line VRAM sharing: 0 = the line owns its VRAM copy, k = it shares
++   * line k-1's copy. An index, not a pointer, so a world copy stays valid in
++   * the destination world; all-zero (the static default) is always safe. */
++  int16_t line_vram_idx[224];
++  int line_vram_owner;
++  MmxBossRushState frame_rush;
++  MmxBossRushVisualState frame_rush_visual;
++  PilotOverlayAlignment pilot_overlay_alignment;
++  MmxZeroState frame_zero;
++  MmxWeaponsState frame_weapons;
++  MmxWeaponCombatState frame_weapon_combat;
++  MmxCoopState frame_coop;
++  MmxCoopViewBoundsState frame_bounds;
++  bool frame_held;
++  int peer_seat;
++  uint8_t partner_ram[0x20000];
++  MmxRenderPlayerOverlay frame_player_overlay;
++  /* The co-op partner seat's Zero, drawn from partner_ram rather than OAM. */
++  MmxRenderPlayerOverlay frame_partner_overlay;
++  MmxRenderWorldSprite frame_world_sprites[MAX_WORLD_SPRITES];
++  unsigned frame_world_sprite_count;
++  MmxRenderDebugRect frame_debug_rects[MAX_DEBUG_RECTS];
++  unsigned frame_debug_rect_count;
++} RenderWorld;
++static RenderWorld render_worlds[2] = {
++  {.line_vram_owner = -1, .peer_seat = -1},
++  {.line_vram_owner = -1, .peer_seat = -1},
++};
++/* NULL means world 0. The slot must stay zero-initialized: a non-zero
++ * initializer (&render_worlds[0]) puts a R_X86_64_RELATIVE relocation into
++ * the TLS template, which the PS4 loader does not apply before copying the
++ * template into threads, so every thread started with a raw link-time
++ * address and the first renderer access faulted. */
++static _Thread_local RenderWorld *render_world_tls;
++static inline RenderWorld *current_world(void) {
++  RenderWorld *w = render_world_tls;
++  return w ? w : &render_worlds[0];
++}
++#define render_world (current_world())
++#define frame (render_world->frame)
++#define line_vram_idx (render_world->line_vram_idx)
++#define line_vram_owner (render_world->line_vram_owner)
++#define frame_rush (render_world->frame_rush)
++#define frame_rush_visual (render_world->frame_rush_visual)
++#define pilot_overlay_alignment (render_world->pilot_overlay_alignment)
++#define frame_zero (render_world->frame_zero)
++#define frame_weapons (render_world->frame_weapons)
++#define frame_weapon_combat (render_world->frame_weapon_combat)
++#define frame_coop (render_world->frame_coop)
++#define frame_bounds (render_world->frame_bounds)
++#define frame_held (render_world->frame_held)
++#define peer_seat (render_world->peer_seat)
++#define partner_ram (render_world->partner_ram)
++#define frame_player_overlay (render_world->frame_player_overlay)
++#define frame_partner_overlay (render_world->frame_partner_overlay)
++#define frame_world_sprites (render_world->frame_world_sprites)
++#define frame_world_sprite_count (render_world->frame_world_sprite_count)
++#define frame_debug_rects (render_world->frame_debug_rects)
++#define frame_debug_rect_count (render_world->frame_debug_rect_count)
 +/* Per-line VRAM sharing. SNES VRAM is only writable in vblank or forced
 + * blank, so within the visible frame consecutive lines almost always see
 + * identical VRAM. Copying all 64 KiB into every Raster cost 14.7 MB of
@@ -94,9 +231,7 @@ index 59dcfdf..05c050a 100644
 + * takes its own copy only when VRAM differs from the last copied line, and
 + * otherwise points at that copy. The comparison is exact, so it holds no
 + * matter which path wrote VRAM. Raster's layout (and the capture file format)
-+ * is unchanged: line_vram[] is a side table, NULL meaning "use r->vram". */
-+static const uint16_t *line_vram[224];
-+static int line_vram_owner = -1;
++ * is unchanged: the sharing is a side table (line_vram_idx in RenderWorld). */
 +typedef uint64_t mmx_u64_unaligned __attribute__((aligned(1), may_alias));
 +static bool vram_equal(const uint16_t *a, const uint16_t *b) {
 +  const mmx_u64_unaligned *x = (const mmx_u64_unaligned *)a;
@@ -112,8 +247,8 @@ index 59dcfdf..05c050a 100644
 +}
 +static inline const uint16_t *raster_vram(const Raster *r) {
 +  if (r >= frame.lines && r < frame.lines + 224) {
-+    const uint16_t *v = line_vram[r - frame.lines];
-+    if (v) return v;
++    int k = line_vram_idx[r - frame.lines];
++    if (k) return frame.lines[k - 1].vram;
 +  }
 +  return r->vram;
 +}
@@ -121,15 +256,68 @@ index 59dcfdf..05c050a 100644
 + * written, so its format and contents stay exactly as before). */
 +static void materialize_line_vram(void) {
 +  for (int i = 0; i < 224; ++i) {
-+    if (line_vram[i] && line_vram[i] != frame.lines[i].vram)
-+      memcpy(frame.lines[i].vram, line_vram[i], sizeof(frame.lines[i].vram));
-+    line_vram[i] = frame.lines[i].vram;
++    int k = line_vram_idx[i];
++    if (k) memcpy(frame.lines[i].vram, frame.lines[k - 1].vram, sizeof(frame.lines[i].vram));
++    line_vram_idx[i] = 0;
 +  }
 +}
  
- typedef struct PilotOverlayAlignment {
-   bool evaluated;
-@@ -767,7 +807,14 @@ void MmxRendererCaptureLine(const Ppu *p, unsigned line) {
+-static PilotOverlayAlignment pilot_overlay_alignment;
+ 
+ static void reset_pilot_overlay_alignment(void) {
+   memset(&pilot_overlay_alignment, 0, sizeof(pilot_overlay_alignment));
+ }
+ 
+-static MmxZeroState frame_zero;
+-static MmxWeaponsState frame_weapons;
+-static MmxWeaponCombatState frame_weapon_combat;
+-static MmxCoopState frame_coop;
+-static MmxCoopViewBoundsState frame_bounds;
+-static bool frame_held;
+-static int peer_seat=-1,view_dx,view_dy;
++static int view_dx,view_dy;
+ void MmxRendererSetPeerView(int seat) { peer_seat=seat>=0 && seat<2?seat:-1; }
+ int MmxRendererGetPeerView(void) { return peer_seat; }
+ static int view_camera(const uint8_t *r,unsigned address) {
+   return (int)(r[address]|r[address+1]<<8)+(address==0x1e4d?view_dx:view_dy);
+ }
+ void MmxRendererHoldFrame(bool held) {frame_held=held;}
+-static uint8_t partner_ram[0x20000];
+ static Raster partner_raster;
+ static Piece building[MAX_PIECES], latched[MAX_PIECES];
+ static unsigned building_count, latched_count;
+@@ -83,18 +181,10 @@ static const uint8_t *rom;
+ static size_t rom_size;
+ static MmxRenderStats stats;
+ static MmxRendererPlayerOverlayProvider player_overlay_provider;
+-static MmxRenderPlayerOverlay frame_player_overlay;
+ /* The co-op partner seat's Zero, drawn from partner_ram rather than OAM. */
+-static MmxRenderPlayerOverlay frame_partner_overlay;
+-enum { MAX_WORLD_SPRITES = 8 };
+ static MmxRendererWorldSpriteProvider world_sprite_provider;
+-static MmxRenderWorldSprite frame_world_sprites[MAX_WORLD_SPRITES];
+-static unsigned frame_world_sprite_count;
+-enum { MAX_DEBUG_RECTS = 64 };
+ static MmxRendererDebugRectProvider debug_rect_provider;
+ static MmxRendererDebugRectProvider hitbox_overlay_provider;
+-static MmxRenderDebugRect frame_debug_rects[MAX_DEBUG_RECTS];
+-static unsigned frame_debug_rect_count;
+ static uint8_t door_cache[512 * 512];
+ static int airport_sky_width;
+ static bool airport_upper_sky;
+@@ -120,9 +210,9 @@ MmxRenderView MmxRendererViewport(MmxRenderAspect mode, int w, int h,
+                   mode == MMX_ASPECT_21_9 ? 21.0 / 9.0 :
+                   mode == MMX_ASPECT_32_9 ? 32.0 / 9.0 :
+                   w > 0 && h > 0 ? (double)w / h : 16.0 / 9.0;
+-  SnesDisplayFrame frame = SnesDisplayAspect_ComputeAdaptiveFrame(
++  SnesDisplayFrame adaptive = SnesDisplayAspect_ComputeAdaptiveFrame(
+       256, MMX_RENDER_HEIGHT, MMX_RENDER_MAX_WIDTH, aspect, display_aspect);
+-  return (MmxRenderView){frame.width, frame.extra, frame.aspect};
++  return (MmxRenderView){adaptive.width, adaptive.extra, adaptive.aspect};
+ }
+ MmxDisplayViewport MmxRendererDestination(MmxRenderView view, int width, int height) {
+   return SnesDisplayAspect_FitViewport(view.aspect, width, height);
+@@ -767,7 +857,14 @@ void MmxRendererCaptureLine(const Ppu *p, unsigned line) {
    memcpy(r->palette, p->cgram, sizeof(r->palette));
    memcpy(r->oam, p->oam, sizeof(r->oam));
    memcpy(r->high_oam, p->highOam, sizeof(r->high_oam));
@@ -138,14 +326,14 @@ index 59dcfdf..05c050a 100644
 +      !vram_equal(p->vram, frame.lines[line_vram_owner].vram)) {
 +    memcpy(r->vram, p->vram, sizeof(r->vram));
 +    line_vram_owner = (int)line - 1;
-+    line_vram[line - 1] = r->vram;
++    line_vram_idx[line - 1] = 0;
 +  } else {
-+    line_vram[line - 1] = frame.lines[line_vram_owner].vram;
++    line_vram_idx[line - 1] = (int16_t)(line_vram_owner + 1);
 +  }
    ++frame.captured;
  }
  bool MmxRendererEndFrame(const uint32_t stock[256 * 224]) {
-@@ -814,6 +861,7 @@ bool MmxRendererSaveCapture(const char *path) {
+@@ -814,6 +911,7 @@ bool MmxRendererSaveCapture(const char *path) {
    uint32_t header[] = {0x4d4d5843, frame_coop.initialized ? 23 : 22,
        sizeof(frame) + sizeof(frame_zero) + sizeof(frame_weapons) + sizeof(frame_weapon_combat) +
        (frame_coop.initialized ? sizeof(frame_coop) : 0) + sizeof(frame_rush) + sizeof(frame_rush_visual)+sizeof(frame_bounds)};
@@ -153,17 +341,17 @@ index 59dcfdf..05c050a 100644
    bool ok = fwrite(header, sizeof(header), 1, f) == 1 && fwrite(&frame, sizeof(frame), 1, f) == 1 &&
        fwrite(&frame_zero, sizeof(frame_zero), 1, f) == 1 &&
        fwrite(&frame_weapons, sizeof(frame_weapons), 1, f) == 1 &&
-@@ -903,6 +951,9 @@ bool MmxRendererLoadCapture(const char *path) {
+@@ -903,6 +1001,9 @@ bool MmxRendererLoadCapture(const char *path) {
    if(ok && h[1]>=20) ok=fread(&frame_rush_visual,sizeof(frame_rush_visual),1,f)==1 && MmxBossRushVisualValidState(&frame_rush_visual);
    if(ok && h[1]>=22) ok=fread(&frame_bounds,sizeof(frame_bounds),1,f)==1 && MmxCoopViewsValidBoundsState(&frame_bounds);
    ok = ok && fgetc(f) == EOF;
 +  /* frame.lines now hold the file's own per-line VRAM: drop any sharing. */
-+  memset(line_vram, 0, sizeof(line_vram));
++  memset(line_vram_idx, 0, sizeof(line_vram_idx));
 +  line_vram_owner = -1;
    fclose(f); frame.valid = ok; return ok;
  }
  
-@@ -924,18 +975,23 @@ bool MmxRendererStageTile(const uint8_t ram[0x20000], unsigned layer,
+@@ -924,18 +1025,23 @@ bool MmxRendererStageTile(const uint8_t ram[0x20000], unsigned layer,
  static bool door_body(int x, int y) {
    if (x < 0 || y < 0 || x >= 8192 || y >= 8192) return false;
    unsigned key = (y >> 4) * 512 + (x >> 4);
@@ -192,7 +380,7 @@ index 59dcfdf..05c050a 100644
  }
  static unsigned tile_pixel(const uint16_t *vram, unsigned address, int x, int y, unsigned bpp) {
    unsigned a = (address + y) & 0x7fff, shift = 7 - x;
-@@ -1062,7 +1118,7 @@ static uint16_t background(const Ppu *p, const Raster *r, unsigned layer, int x,
+@@ -1062,7 +1168,7 @@ static uint16_t background(const Ppu *p, const Raster *r, unsigned layer, int x,
    unsigned a = (sc & 0xfc) * 256 + (tx & 31) + (ty & 31) * 32;
    if ((sc & 1) && (tx & 32)) a += 1024;
    if ((sc & 2) && (ty & 32)) a += (sc & 1) ? 2048 : 1024;
@@ -201,7 +389,7 @@ index 59dcfdf..05c050a 100644
    if(!stage && layer==2 && frame_rush.menu && (frame_rush.mode==MMX_RUSH_OFF ||
        (frame_rush.mode==MMX_RUSH_LOADING && !frame_rush.stage_started))) {
      /* Native title lettering is ASCII-indexed BG3 CHR. Keep its spacing,
-@@ -1211,7 +1267,7 @@ static uint16_t background(const Ppu *p, const Raster *r, unsigned layer, int x,
+@@ -1211,7 +1317,7 @@ static uint16_t background(const Ppu *p, const Raster *r, unsigned layer, int x,
      unsigned shift = 7 - (cx & 7);
      pixel = ((bits[0] >> shift) & 1) | (((bits[1] >> shift) & 1) << 1) |
          (((bits[16] >> shift) & 1) << 2) | (((bits[17] >> shift) & 1) << 3);
@@ -210,7 +398,7 @@ index 59dcfdf..05c050a 100644
    if (!pixel) return 0;
    unsigned index = (((tile >> 10) & 7) << bpp) | pixel;
    const MmxBackgroundPalette *palette = stage && g_mmx_render_asset_repairs ?
-@@ -1256,7 +1312,7 @@ static void sprite(const Ppu *p, const Raster *r, int x, int sy, unsigned attr,
+@@ -1256,7 +1362,7 @@ static void sprite(const Ppu *p, const Raster *r, int x, int sy, unsigned attr,
        unsigned shift = 7 - (cx & 7);
        pixel = ((bits[0] >> shift) & 1) | (((bits[1] >> shift) & 1) << 1) |
            (((bits[16] >> shift) & 1) << 2) | (((bits[17] >> shift) & 1) << 3);
@@ -219,7 +407,7 @@ index 59dcfdf..05c050a 100644
      int hud_color = zero_icon ? MmxZeroHudColor(cx, row) : -1;
      if (hud_color >= 0) pixel = 1;
      else if (hud_color == -2) pixel = 0;
-@@ -1742,7 +1798,7 @@ static void coop_inverted_badge_row(const Ppu *ppu,const Raster *r,int y,MmxRend
+@@ -1742,7 +1848,7 @@ static void coop_inverted_badge_row(const Ppu *ppu,const Raster *r,int y,MmxRend
          unsigned shift=7-(col&7);
          pixel=((bits[0]>>shift)&1)|(((bits[1]>>shift)&1)<<1)|
              (((bits[16]>>shift)&1)<<2)|(((bits[17]>>shift)&1)<<3);
@@ -228,7 +416,7 @@ index 59dcfdf..05c050a 100644
        color=frame_art?frame_art->colors[pixel]:r->palette[128+palette*16+pixel];
      }
      objects[dx]=0xe6a1;colors[dx]=color;
-@@ -1881,7 +1937,7 @@ static void rush_native_text(uint32_t *out,MmxRenderView view,int x,int y,const
+@@ -1881,7 +1987,7 @@ static void rush_native_text(uint32_t *out,MmxRenderView view,int x,int y,const
      if((p.inidisp&128) && palette<8) continue;
      for(unsigned n=0;s[n];++n) for(int col=0;col<8;++col) {
        int dx=x+(int)n*8+col;if(dx<0 || dx>=view.width) continue;
@@ -237,7 +425,7 @@ index 59dcfdf..05c050a 100644
        if(!pixel) continue;
        /* Keep the original options font's three shades. Mammoth's stage
         * repurposes the live text palette, making the counter/labels black.
-@@ -1897,6 +1953,97 @@ static void rush_native_text(uint32_t *out,MmxRenderView view,int x,int y,const
+@@ -1897,6 +2003,99 @@ static void rush_native_text(uint32_t *out,MmxRenderView view,int x,int y,const
      }
    }
  }
@@ -253,6 +441,7 @@ index 59dcfdf..05c050a 100644
 +static int row_object_colors[224][MMX_RENDER_MAX_WIDTH];
 +static bool row_compose[224];
 +typedef struct ComposeContext {
++  RenderWorld *world; /* the composing thread's world, adopted by workers */
 +  uint32_t *out; MmxRenderView view; bool stage, menu;
 +  unsigned beam_count; const LightBeam *beams; unsigned palette_fade;
 +  const int16_t *crystal_ripple;
@@ -320,6 +509,7 @@ index 59dcfdf..05c050a 100644
 +static bool compose_pool_tried;
 +static void compose_range(void *context, size_t begin, size_t end, unsigned slot) {
 +  (void)slot;
++  render_world_tls = ((const ComposeContext *)context)->world;
 +  for (size_t y = begin; y < end; ++y)
 +    if (row_compose[y]) compose_row((const ComposeContext *)context, (int)y);
 +}
@@ -335,7 +525,7 @@ index 59dcfdf..05c050a 100644
  bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
    if (!out || !frame.valid || view.width < 256 || view.width > MMX_RENDER_MAX_WIDTH ||
        view.extra != (view.width - 256) / 2 || (view.width & 1)) return false;
-@@ -2065,6 +2212,20 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
+@@ -2065,6 +2264,20 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
    if (frame_coop.initialized && MmxWeaponsTimePhase(&frame_coop.players[frame_coop.current^1].combat)==1 &&
        MmxWeaponsTimePhase(&frame_weapon_combat)!=1)
      MmxWeaponsTimeRipple(&frame_coop.players[frame_coop.current^1].combat,crystal_ripple);
@@ -356,7 +546,7 @@ index 59dcfdf..05c050a 100644
    for (int y = 0; y < 224; ++y) {
      const Raster *r = &frame.lines[y]; Ppu p;
      memcpy(&p, r->registers, PPU_SAVESTATE_REGS_SIZE);
-@@ -2075,19 +2236,14 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
+@@ -2075,19 +2288,14 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
      }
      ++stats.custom_lines;
      if (p.inidisp & 128) continue;
@@ -383,7 +573,7 @@ index 59dcfdf..05c050a 100644
      for (int i = (int)storm_count - 1; i >= 0; --i) {
        Piece s = storm[i];
        const MmxSpriteAsset *asset = s.animation == 0x38 ? storm_heart : storm_platform;
-@@ -2102,6 +2258,10 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
+@@ -2102,6 +2310,10 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
        sprite(&p, r, s.x, s.y, s.attr, s.size, y, view, objects, true, asset, s.tile, object_colors, true, false, false);
      }
      bool replaced[128] = {false};
@@ -394,7 +584,7 @@ index 59dcfdf..05c050a 100644
      bool zero_drawn[2] = {false,false};
      for (int i = (int)piece_count - 1; i >= 0; --i) {
        Piece s = pieces[i]; const MmxSpriteAsset *asset = piece_assets[i];
-@@ -2133,12 +2293,20 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
+@@ -2133,12 +2345,20 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
        bool zero_armor = zero && (s.object == 0xc38 || s.object == 0xc58 || s.object == 0xc78 ||
            (zero_menu && (s.object == 0x1928 || s.object == 0x1948 || s.object == 0x1968)));
        bool oam_match = false;
@@ -421,7 +611,7 @@ index 59dcfdf..05c050a 100644
          }
        }
        if(frame_rush.mode==MMX_RUSH_PLAYING && !frame.expand && s.object>=0xe68 && s.object<0x1d08 &&
-@@ -2270,6 +2438,10 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
+@@ -2270,6 +2490,10 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
        }
        sprite(&p, r, s.x, s.y, attr, s.size, y, view, objects, !center, asset, s.tile, object_colors, true, false, red_ready || red_death);
      }
@@ -432,7 +622,7 @@ index 59dcfdf..05c050a 100644
      if (stage) coop_partner_row(&p,r,y,view,objects,object_colors);
      int bar_first = -1, bar_count = 0;
      if (hud) for (int slot = 16; slot <= 48; ++slot) {
-@@ -2347,42 +2519,10 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
+@@ -2347,42 +2571,10 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
      if (swapping) teleport_actor_row(frame.ram,&frame_zero,&p,r,y,view,objects,object_colors);
      if(coop_hud) coop_hud_row(&p,r,y,view,hud,objects,object_colors);
      if(rush_hud) rush_hud_row(&p,r,y,view,objects,object_colors);
@@ -474,8 +664,231 @@ index 59dcfdf..05c050a 100644
 -    }
 +  }
 +  {
-+    ComposeContext ctx = {out, view, stage, menu, beam_count, beams, palette_fade, crystal_ripple};
++    ComposeContext ctx = {render_world, out, view, stage, menu, beam_count, beams, palette_fade, crystal_ripple};
 +    compose_rows(&ctx);
    }
    for (unsigned i = 0; i < frame_debug_rect_count; ++i)
      draw_debug_rect(out, view, &frame_debug_rects[i]);
+@@ -2403,3 +2595,201 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
+   }
+   return true;
+ }
++
++#if defined(SRPS4)
++/* ---- Pipelined compose (snesrecomp-ps4) ---------------------------------
++ * The widescreen compose of frame N runs on its own thread while the main
++ * thread emulates and captures frame N+1. Per-frame cost becomes roughly
++ * max(guest + capture, compose) instead of their sum, for one frame of
++ * added latency.
++ *
++ * Main thread, at the end of each capture (MmxRendererPipelineSubmit):
++ *   wait for the compose thread to go idle, copy world 0 (capture) into
++ *   world 1 (compose snapshot), post the job. Main thread, at present
++ *   (MmxRendererPipelineLatest): use the newest completed composition;
++ *   when nothing new was captured since the last present (pause, menus,
++ *   thumbnails), wait for the in-flight one so the newest frame shows.
++ *
++ * Correctness rests on the compose side reading only world 1 plus its own
++ * scratch; see the RenderWorld notes at the top of this file. */
++#include <pthread.h>
++#include <stdlib.h>
++#include <stddef.h>
++#if SRPS4_CONSOLE
++int scePthreadSetaffinity(pthread_t thread, unsigned long mask);
++pthread_t scePthreadSelf(void);
++#endif
++
++enum { PIPE_SLOTS = 2 };
++static struct {
++  bool started, failed;
++  pthread_t thread;
++  pthread_mutex_t lock;
++  pthread_cond_t job_ready, job_done;
++  bool busy;                 /* a job is posted or running */
++  unsigned generation;       /* bumped on every submit */
++  /* Job inputs (copied at submit). */
++  MmxRenderView view; bool hud, valid;
++  unsigned slot;             /* output slot the job writes */
++  /* Results. */
++  uint32_t out[PIPE_SLOTS][MMX_RENDER_MAX_WIDTH * 224];
++  int width[PIPE_SLOTS];
++  int completed;             /* slot of the newest completed composition, -1 none */
++  int previous;              /* at submit: the composition it supersedes (N-1) */
++  bool fresh;                /* a submit happened since the last present */
++  uint32_t fallback_field[256 * 224];
++} pipe = {.completed = -1, .previous = -1};
++
++/* copy_world names RenderWorld members directly: suspend the per-thread
++ * aliases for its body. */
++#pragma push_macro("frame")
++#pragma push_macro("line_vram_idx")
++#undef frame
++#undef line_vram_idx
++static void copy_world(RenderWorld *dst, const RenderWorld *src) {
++  const Frame *sf = &src->frame;
++  Frame *df = &dst->frame;
++  for (int i = 0; i < 224; ++i) {
++    const Raster *r = &sf->lines[i];
++    Raster *d = &df->lines[i];
++    memcpy(d->registers, r->registers, sizeof(d->registers));
++    memcpy(d->palette, r->palette, sizeof(d->palette));
++    memcpy(d->oam, r->oam, sizeof(d->oam));
++    memcpy(d->high_oam, r->high_oam, sizeof(d->high_oam));
++    /* Shared lines take their pixels from their owner's copy. */
++    if (!src->line_vram_idx[i]) memcpy(d->vram, r->vram, sizeof(d->vram));
++  }
++  const size_t tail = offsetof(Frame, ram);
++  memcpy((char *)df + tail, (const char *)sf + tail, sizeof(Frame) - tail);
++  const size_t rest = offsetof(RenderWorld, line_vram_idx);
++  memcpy((char *)dst + rest, (const char *)src + rest, sizeof(RenderWorld) - rest);
++}
++#pragma pop_macro("line_vram_idx")
++#pragma pop_macro("frame")
++
++static void pipe_fallback(uint32_t *out, int w) {
++  /* Same as MmxDrawFrame's stock fallback, from the field captured with
++   * this job (the live PPU buffer has moved on by now). */
++  memset(out, 0, (size_t)w * 224 * sizeof(*out));
++  for (int y = 0; y < 224; ++y)
++    memcpy(out + y * w + (w - 256) / 2, pipe.fallback_field + y * 256, 256 * 4);
++}
++
++static void *pipe_main(void *unused) {
++  (void)unused;
++#if SRPS4_CONSOLE
++  /* Core 5: the main thread owns core 0, compose workers cores 1-4. */
++  const char *pin = getenv("SNESRECOMP_RENDER_PIN");
++  if (!(pin && *pin == '0')) scePthreadSetaffinity(scePthreadSelf(), 1ul << 5);
++#endif
++  render_world_tls = &render_worlds[1];
++  pthread_mutex_lock(&pipe.lock);
++  for (;;) {
++    while (!pipe.busy) pthread_cond_wait(&pipe.job_ready, &pipe.lock);
++    MmxRenderView view = pipe.view; bool hud = pipe.hud, valid = pipe.valid;
++    unsigned slot = pipe.slot;
++    pthread_mutex_unlock(&pipe.lock);
++    uint32_t *out = pipe.out[slot];
++    if (!valid || !MmxRendererDraw(out, view, hud)) pipe_fallback(out, view.width);
++    pthread_mutex_lock(&pipe.lock);
++    pipe.width[slot] = view.width;
++    pipe.completed = (int)slot;
++    pipe.busy = false;
++    pthread_cond_broadcast(&pipe.job_done);
++  }
++  return NULL;
++}
++
++bool MmxRendererPipelineEnabled(void) {
++  static int enabled = -1;
++  if (enabled < 0) {
++    const char *v = getenv("MMX_RENDER_PIPELINE");
++#if SRPS4_CONSOLE
++    enabled = !(v && *v == '0');      /* console: on unless disabled */
++#else
++    enabled = v && *v && *v != '0';   /* native smoke test: opt in */
++#endif
++  }
++  return enabled && !pipe.failed;
++}
++
++static bool pipe_start(void) {
++  if (pipe.started) return !pipe.failed;
++  pipe.started = true;
++  if (pthread_mutex_init(&pipe.lock, NULL) || pthread_cond_init(&pipe.job_ready, NULL) ||
++      pthread_cond_init(&pipe.job_done, NULL) ||
++      pthread_create(&pipe.thread, NULL, pipe_main, NULL)) {
++    pipe.failed = true;
++    fprintf(stderr, "[mmx] pipelined compose unavailable; composing on the main thread\n");
++    return false;
++  }
++  fprintf(stderr, "[mmx] pipelined compose enabled\n");
++  return true;
++}
++
++static void pipe_wait_idle_locked(void) {
++  while (pipe.busy) pthread_cond_wait(&pipe.job_done, &pipe.lock);
++}
++
++void MmxRendererPipelineSubmit(MmxRenderView view, bool hud, bool valid,
++                               const uint32_t *field) {
++  if (!pipe_start()) return;
++  pthread_mutex_lock(&pipe.lock);
++  pipe_wait_idle_locked();
++  /* The compose thread is idle: world 1 and the fallback field are free. */
++  copy_world(&render_worlds[1], &render_worlds[0]);
++  if (field) memcpy(pipe.fallback_field, field, sizeof(pipe.fallback_field));
++  else memset(pipe.fallback_field, 0, sizeof(pipe.fallback_field));
++  pipe.view = view; pipe.hud = hud; pipe.valid = valid;
++  /* Frame N-1 is complete (the thread is idle): it is what the next present
++   * shows, whatever the new job's timing. Write the job into the other slot
++   * so that present never races the compose thread. */
++  pipe.previous = pipe.completed;
++  pipe.slot = pipe.previous == 0 ? 1u : 0u;
++  pipe.busy = true;
++  ++pipe.generation;
++  pipe.fresh = true;
++  pthread_cond_signal(&pipe.job_ready);
++  pthread_mutex_unlock(&pipe.lock);
++}
++
++const uint32_t *MmxRendererPipelineLatest(int *width) {
++  if (!pipe.started || pipe.failed) return NULL;
++  pthread_mutex_lock(&pipe.lock);
++  /* A present right after a submit shows exactly frame N-1 -- never "the
++   * newest that happens to be done", which would alternate between N-1 and
++   * N with compose timing and judder. With nothing captured since the last
++   * present (pause, menus, thumbnails), or before any earlier composition
++   * exists, wait for the in-flight frame and show it. */
++  int slot;
++  if (pipe.fresh && pipe.previous >= 0) {
++    slot = pipe.previous;
++  } else {
++    pipe_wait_idle_locked();
++    slot = pipe.completed;
++  }
++  pipe.fresh = false;
++  const uint32_t *out = slot >= 0 ? pipe.out[slot] : NULL;
++  if (out && width) *width = pipe.width[slot];
++  pthread_mutex_unlock(&pipe.lock);
++  return out;
++}
++
++/* The custom renderer is off this frame: drop the remembered compositions so
++ * that turning it back on never shows a frame from before. */
++void MmxRendererPipelineForget(void) {
++  if (!pipe.started || pipe.failed) return;
++  pthread_mutex_lock(&pipe.lock);
++  pipe_wait_idle_locked();
++  pipe.completed = pipe.previous = -1;
++  pipe.fresh = false;
++  pthread_mutex_unlock(&pipe.lock);
++}
++
++void MmxRendererPipelineDrain(void) {
++  if (!pipe.started || pipe.failed) return;
++  pthread_mutex_lock(&pipe.lock);
++  pipe_wait_idle_locked();
++  pthread_mutex_unlock(&pipe.lock);
++}
++#endif
+diff --git a/src/mmx_renderer.h b/src/mmx_renderer.h
+index 5668c18..30fe2f7 100644
+--- a/src/mmx_renderer.h
++++ b/src/mmx_renderer.h
+@@ -127,6 +127,16 @@ void MmxRendererHoldFrame(bool held);
+ void MmxRendererCaptureLine(const Ppu *ppu, unsigned line);
+ bool MmxRendererEndFrame(const uint32_t stock[256 * 224]);
+ bool MmxRendererDraw(uint32_t *output, MmxRenderView view, bool anchor_hud);
++#if defined(SRPS4)
++/* snesrecomp-ps4 pipelined compose: frame N composes on its own thread while
++ * the main thread emulates and captures N+1 (see mmx_renderer.c). */
++bool MmxRendererPipelineEnabled(void);
++void MmxRendererPipelineSubmit(MmxRenderView view, bool hud, bool valid,
++                               const uint32_t *field);
++const uint32_t *MmxRendererPipelineLatest(int *width);
++void MmxRendererPipelineDrain(void);
++void MmxRendererPipelineForget(void);
++#endif
+ MmxRenderStats MmxRendererGetStats(void);
+ bool MmxRendererStageTile(const uint8_t ram[0x20000], unsigned layer,
+                           int x, int y, uint16_t *word);

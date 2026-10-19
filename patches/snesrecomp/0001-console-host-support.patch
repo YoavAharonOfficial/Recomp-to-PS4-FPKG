@@ -151,7 +151,7 @@ index 216a8ff..bc67835 100644
      return (n > 0 && n < max_len) ? 1 : 0;
  #elif defined(__APPLE__)
 diff --git a/runner/src/render_workers.c b/runner/src/render_workers.c
-index bd34fbf..93750ad 100644
+index bd34fbf..b3e50f5 100644
 --- a/runner/src/render_workers.c
 +++ b/runner/src/render_workers.c
 @@ -36,11 +36,55 @@ static void condition_wake(WorkerCondition *c) { pthread_cond_signal(c); }
@@ -174,9 +174,9 @@ index bd34fbf..93750ad 100644
 + * The PS4 scheduler (FreeBSD ULE) tends to wake a sleeping thread near the
 + * CPU that woke it. These workers sleep between frames and run for a few ms
 + * per frame, so unpinned they can pile onto the main thread's core and the
-+ * "parallel" compose serializes (console: 12.8 ms for 4 participants where
-+ * ~6-8 ms was expected). On the console the caller is pinned to core 0 and
-+ * worker k to core k, inside the six cores a game process owns. */
++ * "parallel" compose serializes. On the console worker k is pinned to core
++ * k (1-4), inside the six cores a game process owns; the main thread (core
++ * 0) and the compose thread (core 5) pin themselves. */
 +#if defined(SRPS4) && SRPS4_CONSOLE
 +int scePthreadSetaffinity(pthread_t thread, unsigned long mask);
 +pthread_t scePthreadSelf(void);
@@ -263,7 +263,7 @@ index bd34fbf..93750ad 100644
      }
    }
    if (requested > cpus) requested = cpus;
-@@ -147,6 +213,11 @@ SnesRenderWorkers *SnesRenderWorkersCreate(unsigned max_participants) {
+@@ -147,6 +213,13 @@ SnesRenderWorkers *SnesRenderWorkersCreate(unsigned max_participants) {
    if (!mutex_init(&pool->state)) goto free_submission;
    if (!condition_init(&pool->work)) goto free_state;
    if (!condition_init(&pool->finished)) goto free_work;
@@ -271,11 +271,13 @@ index bd34fbf..93750ad 100644
 +    const char *profile = getenv("SNESRECOMP_HOST_PROFILE");
 +    pool->stats = profile && *profile && *profile != '0';
 +  }
-+  pin_current_thread(0);
++  /* The caller is not pinned here: with pipelined compose the pool's caller
++   * is the compose thread, which pins itself; the host pins its main thread
++   * at startup. Workers take cores 1-4. */
    for (unsigned i = 0; i + 1 < participants; ++i) {
      Worker *worker = &pool->workers[i];
      worker->pool = pool; worker->slot = i + 1;
-@@ -191,11 +262,29 @@ bool SnesRenderWorkersRun(SnesRenderWorkers *pool, size_t count, size_t grain,
+@@ -191,11 +264,29 @@ bool SnesRenderWorkersRun(SnesRenderWorkers *pool, size_t count, size_t grain,
    ++pool->generation;
    condition_wake_all(&pool->work);
    mutex_unlock(&pool->state);

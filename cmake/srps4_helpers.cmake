@@ -12,6 +12,8 @@ function(srps4_add_host target)
         ${SRPS4_ROOT}/src/srps4_main.c
         ${SRPS4_ROOT}/src/srps4_paths.c
         ${SRPS4_ROOT}/src/srps4_log.c
+        ${SRPS4_ROOT}/src/srps4_time.c
+        ${SRPS4_ROOT}/src/srps4_affinity.c
         ${SRPS4_ROOT}/src/srps4_ucontext.c
         ${SRPS4_ROOT}/src/srps4_ucontext.S)
 
@@ -26,6 +28,10 @@ function(srps4_add_host target)
                fwrite perror fflush)
         target_link_options(${target} PRIVATE "LINKER:--wrap=${fn}")
     endforeach()
+    if(SRPS4_TARGET_PS4)
+        # musl's (Linux) clock ids -> libkernel's (FreeBSD); see srps4_time.c.
+        target_link_options(${target} PRIVATE "LINKER:--wrap=clock_gettime")
+    endif()
     if(NOT SRPS4_TARGET_PS4)
         # glibc's fortified __fprintf_chk & co. would bypass the wraps.
         target_compile_options(${target} PRIVATE -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0)

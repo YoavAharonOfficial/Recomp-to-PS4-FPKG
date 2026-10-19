@@ -20,6 +20,7 @@
 #include <unistd.h>
 
 #include "srps4_platform.h"
+void srps4_pin_current_thread(unsigned core);
 
 #if SRPS4_CONSOLE
 #include <orbis/libkernel.h>
@@ -217,6 +218,17 @@ int main(int argc, char **argv) {
   if (chdir(s_data_dir) != 0) srps4_log("chdir(%s) failed (errno %d)", s_data_dir, errno);
 
   apply_env_file();
+
+#if SRPS4_CONSOLE
+  /* Core 0 for the main thread (emulation, capture, presentation). The
+   * compose thread takes core 5 and its workers cores 1-4, so pipelined
+   * compose never competes with emulation for a core.
+   * SNESRECOMP_RENDER_PIN=0 (srps4_env.txt) leaves every thread unpinned. */
+  {
+    const char *pin = getenv("SNESRECOMP_RENDER_PIN");
+    if (!(pin && *pin == '0')) srps4_pin_current_thread(0);
+  }
+#endif
 
   /* The console has no keyboard or launcher; boot straight into the game. */
   setenv("SNESRECOMP_NO_LAUNCHER", "1", 1);
