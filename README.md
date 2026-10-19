@@ -187,6 +187,37 @@ replays the console's shape (vsync, 59.94 Hz, 11 ms of work). It fails on the
 old rule and passes on the new one.
 
 
+### Compiler: -O3 plus profile-guided optimization
+
+Two problems with the console build:
+
+- It ran at `-O2`. A per-target `-O2` silently overrode the Release
+  `-O3`.
+- Its compiler is clang 18, the same version as the host's `clang-18`.
+  That means a profile recorded by an instrumented *native* build of the
+  same sources can feed the PS4 build.
+
+`scripts/pgo_train.sh` records that profile:
+
+- It builds the instrumented native port and plays `tests/*.script`.
+- It writes `games/<title>/pgo.profdata`, which the PS4 build picks up
+  automatically (`SRPS4_PGO_PROFILE`).
+- Functions that differ between the native and console builds simply get
+  no profile data.
+- The profile is regenerated rather than committed, because it is built
+  from ROM-derived code.
+
+Native single-thread benchmark (Highway, 17,869 frames):
+
+| | guest | raster | compose |
+|---|---|---|---|
+| `-O2` | 0.885 ms | 0.631 ms | 7.669 ms |
+| `-O2` + PGO trained without Highway | 0.699 | 0.555 | 6.120 |
+| `-O3` + PGO | 0.655 | 0.550 | 5.882 |
+
+The held-out row shows the profile generalises beyond its training
+scripts. Every build's presented frames are CRC-identical to the baseline.
+
 ## Building
 
 1. **SDK:** `scripts/bootstrap_sdk.sh ~/ps4sdk`. This builds OpenOrbis tools,

@@ -127,7 +127,7 @@ index a7db476..2ab14e6 100644
  /* Explicit ROM resource binding for presentation-only dormant actor art. */
  const MmxSpriteAsset *MmxRenderAssetsResource(unsigned stage, unsigned section, unsigned resource);
 diff --git a/src/mmx_renderer.c b/src/mmx_renderer.c
-index 59dcfdf..fc3ef8c 100644
+index 59dcfdf..b6f4d7d 100644
 --- a/src/mmx_renderer.c
 +++ b/src/mmx_renderer.c
 @@ -19,8 +19,6 @@ typedef struct Raster {
@@ -444,7 +444,7 @@ index 59dcfdf..fc3ef8c 100644
        if(!pixel) continue;
        /* Keep the original options font's three shades. Mammoth's stage
         * repurposes the live text palette, making the counter/labels black.
-@@ -1897,6 +2022,99 @@ static void rush_native_text(uint32_t *out,MmxRenderView view,int x,int y,const
+@@ -1897,12 +2022,137 @@ static void rush_native_text(uint32_t *out,MmxRenderView view,int x,int y,const
      }
    }
  }
@@ -541,10 +541,61 @@ index 59dcfdf..fc3ef8c 100644
 +  for (int y = 0; y < 224; ++y) if (row_compose[y]) compose_row(c, y);
 +}
 +
++/* MMX_DRAW_TIMING=<path>: one CSV row per composition with the time spent in
++ * each phase (snesrecomp-ps4 spike hunting). Off by default; costs one
++ * getenv per process. */
++#include <time.h>
++static FILE *draw_timing_file;
++static int draw_timing_state = -1;   /* -1 unknown, 0 off, 1 on */
++static double draw_marks[8];
++static unsigned draw_mark_count, draw_timing_calls;
++static double draw_now(void) {
++  struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
++  return ts.tv_sec + ts.tv_nsec * 1e-9;
++}
++static void draw_mark(void) {
++  if (draw_timing_state < 0) {
++    const char *path = getenv("MMX_DRAW_TIMING");
++    draw_timing_file = path && *path ? fopen(path, "w") : NULL;
++    draw_timing_state = draw_timing_file != NULL;
++    if (draw_timing_file)
++      fprintf(draw_timing_file, "call,planes_ms,assets_ms,bg_prepare_ms,sprites_ms,compose_ms,tail_ms,total_ms\n");
++  }
++  if (draw_timing_state && draw_mark_count < 8) draw_marks[draw_mark_count++] = draw_now();
++}
++static void draw_mark_flush(void) {
++  if (!draw_timing_state || draw_mark_count != 7) { draw_mark_count = 0; return; }
++  fprintf(draw_timing_file, "%u", draw_timing_calls++);
++  for (unsigned i = 1; i < 7; ++i) fprintf(draw_timing_file, ",%.3f", (draw_marks[i] - draw_marks[i - 1]) * 1e3);
++  fprintf(draw_timing_file, ",%.3f\n", (draw_marks[6] - draw_marks[0]) * 1e3);
++  if ((draw_timing_calls & 255) == 0) fflush(draw_timing_file);
++  draw_mark_count = 0;
++}
++
  bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
    if (!out || !frame.valid || view.width < 256 || view.width > MMX_RENDER_MAX_WIDTH ||
        view.extra != (view.width - 256) / 2 || (view.width & 1)) return false;
-@@ -2065,6 +2283,20 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
+   memset(&stats, 0, sizeof(stats)); stats.pieces = frame.piece_count;
+   memset(door_cache, 0, sizeof(door_cache));
+   memset(out, 0, (size_t)view.width * 224 * sizeof(*out));
++  draw_mark_count = 0; draw_mark();
+   if(frame_rush.mode==MMX_RUSH_FINISHED) {
+     /* Own the whole page so native death flashes, HUD badges and the world
+      * cannot bleed through the options-style results screen. */
+@@ -1959,6 +2209,7 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
+     weapon_colors=x_weapon_palette.colors;
+   }
+   prepare_stage_planes();
++  draw_mark();
+   LightBeam beams[2];
+   unsigned beam_count = stage ? spark_lights(beams, view.extra) : 0;
+   unsigned palette_fade = stage && g_mmx_render_asset_repairs ?
+@@ -2061,10 +2312,26 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
+         (s->object == 0xe18 && MmxRenderAssetsRideArmorPalettePending(frame.ram,
+             frame.lines[0].palette + 128 + ((s->attr >> 9) & 7) * 16)))) piece_assets[i] = a;
+   }
++  draw_mark();
+   int16_t crystal_ripple[224];MmxWeaponsTimeRipple(&frame_weapon_combat,crystal_ripple);
    if (frame_coop.initialized && MmxWeaponsTimePhase(&frame_coop.players[frame_coop.current^1].combat)==1 &&
        MmxWeaponsTimePhase(&frame_weapon_combat)!=1)
      MmxWeaponsTimeRipple(&frame_coop.players[frame_coop.current^1].combat,crystal_ripple);
@@ -562,10 +613,11 @@ index 59dcfdf..fc3ef8c 100644
 +  if (stage || menu || zero_title || frame_rush.menu)
 +    MmxRenderAssetsPrepareConcurrentReads(frame.ram, frame_rush.mode==MMX_RUSH_PLAYING ||
 +        frame_rush.mode==MMX_RUSH_PREPARING);
++  draw_mark();
    for (int y = 0; y < 224; ++y) {
      const Raster *r = &frame.lines[y]; Ppu p;
      memcpy(&p, r->registers, PPU_SAVESTATE_REGS_SIZE);
-@@ -2075,19 +2307,14 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
+@@ -2075,19 +2342,14 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
      }
      ++stats.custom_lines;
      if (p.inidisp & 128) continue;
@@ -592,7 +644,7 @@ index 59dcfdf..fc3ef8c 100644
      for (int i = (int)storm_count - 1; i >= 0; --i) {
        Piece s = storm[i];
        const MmxSpriteAsset *asset = s.animation == 0x38 ? storm_heart : storm_platform;
-@@ -2102,6 +2329,10 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
+@@ -2102,6 +2364,10 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
        sprite(&p, r, s.x, s.y, s.attr, s.size, y, view, objects, true, asset, s.tile, object_colors, true, false, false);
      }
      bool replaced[128] = {false};
@@ -603,7 +655,7 @@ index 59dcfdf..fc3ef8c 100644
      bool zero_drawn[2] = {false,false};
      for (int i = (int)piece_count - 1; i >= 0; --i) {
        Piece s = pieces[i]; const MmxSpriteAsset *asset = piece_assets[i];
-@@ -2133,12 +2364,20 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
+@@ -2133,12 +2399,20 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
        bool zero_armor = zero && (s.object == 0xc38 || s.object == 0xc58 || s.object == 0xc78 ||
            (zero_menu && (s.object == 0x1928 || s.object == 0x1948 || s.object == 0x1968)));
        bool oam_match = false;
@@ -630,7 +682,7 @@ index 59dcfdf..fc3ef8c 100644
          }
        }
        if(frame_rush.mode==MMX_RUSH_PLAYING && !frame.expand && s.object>=0xe68 && s.object<0x1d08 &&
-@@ -2270,6 +2509,10 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
+@@ -2270,6 +2544,10 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
        }
        sprite(&p, r, s.x, s.y, attr, s.size, y, view, objects, !center, asset, s.tile, object_colors, true, false, red_ready || red_death);
      }
@@ -641,7 +693,7 @@ index 59dcfdf..fc3ef8c 100644
      if (stage) coop_partner_row(&p,r,y,view,objects,object_colors);
      int bar_first = -1, bar_count = 0;
      if (hud) for (int slot = 16; slot <= 48; ++slot) {
-@@ -2347,42 +2590,10 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
+@@ -2347,43 +2625,13 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
      if (swapping) teleport_actor_row(frame.ram,&frame_zero,&p,r,y,view,objects,object_colors);
      if(coop_hud) coop_hud_row(&p,r,y,view,hud,objects,object_colors);
      if(rush_hud) rush_hud_row(&p,r,y,view,objects,object_colors);
@@ -681,15 +733,21 @@ index 59dcfdf..fc3ef8c 100644
 -      out[y * view.width + sx] = colour(&p, r->palette, brightness, screens[0], screens[1], color_window, object_colors[sx], bg_colors,
 -                                       dialogue_backdrop && (x < 0 || x >= 256),camouflage_bg);
 -    }
-+  }
+   }
++  draw_mark();
 +  {
 +    ComposeContext ctx = {render_world, out, view, stage, menu, beam_count, beams, palette_fade, crystal_ripple};
 +    compose_rows(&ctx);
-   }
++  }
++  draw_mark();
    for (unsigned i = 0; i < frame_debug_rect_count; ++i)
      draw_debug_rect(out, view, &frame_debug_rects[i]);
-@@ -2403,3 +2614,238 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
+   if(stage) {
+@@ -2401,5 +2649,241 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
+     for(unsigned i=0;i<2;++i) if(frame_rush.bosses[i].phase)
+       rush_native_text(out,view,view.width-40+(int)i*16,96,labels[frame_rush.bosses[i].id],7);
    }
++  draw_mark(); draw_mark_flush();
    return true;
  }
 +

@@ -77,6 +77,7 @@ SNESRECOMP_HOST_PROFILE=1         # timing breakdown, per-worker and [mmx pipe] 
 SNESRECOMP_HOST_PROFILE_START_FRAME=900   # skip boot and the title screen in the summary
 SNESRECOMP_FRAME_TIMING=/data/MegaManX/logs/frames.csv   # per-frame stage timings (CSV)
 SNESRECOMP_RUN_FRAMES=3600        # quit after N frames (writes the profile summary)
+MMX_DRAW_TIMING=/data/MegaManX/logs/draw.csv   # per-frame widescreen compose phases (CSV)
 ```
 
 `[mmx pipe]` lines report three things per 600 frames: the compose thread's

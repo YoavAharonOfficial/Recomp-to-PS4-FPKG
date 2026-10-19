@@ -57,7 +57,7 @@ function(srps4_add_host target)
     endif()
     if(SRPS4_TARGET_PS4)
         # Jaguar (btver2) codegen: AVX/SSE4.2/BMI, tuned for the console CPU.
-        target_compile_options(${target} PRIVATE -march=btver2 -O2)
+        target_compile_options(${target} PRIVATE -march=btver2 -O3)
         # SDL2 (PacBrew) is static; its PS4 backends call into these system
         # modules. Order matters for single-pass resolution, so keep it in a
         # group (the toolchain's link rule already wraps --start-group).

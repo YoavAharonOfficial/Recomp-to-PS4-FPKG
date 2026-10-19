@@ -9,3 +9,4 @@ work/
 *.rom.tmp
 build-*.log
 *.profraw
+*.profdata
