@@ -116,7 +116,17 @@ output itself.
 3. **Shared per-line VRAM.** Capture used to copy all 64 KiB of VRAM into
    each of the 224 line records, 14.7 MB of `memcpy` per frame. SNES VRAM is
    only writable in vblank or forced blank, so a line now copies VRAM only
-   when an exact comparison against the last copied line differs.
+   when VRAM has changed since the last copied line.
+   - The test was first an exact 64 KiB comparison per line. That read
+     28 MB a frame, because an equal line reads both copies in full.
+   - The test is now the PPU's own `vramWriteCount`, which every VRAM write
+     path bumps: the `$2118/$2119` ports, the 16-bit word store, and a state
+     load. A count that hasn't moved proves VRAM is unchanged.
+   - A count can move without a change, for example a write that stores the
+     same value, so the rule only ever errs toward copying.
+   - Natively this cut raster capture by about 40%. `MMX_VRAM_VERIFY=1`
+     re-runs the full comparison on every shared line. It found no
+     disagreement over the intro, Highway and Boss Rush scripts.
 4. **Pipelined compose.** Console profiling (Jaguar, widescreen) measured
    guest 4.5 ms, capture 5.9 ms and compose 11.9 ms per frame. That is about
    22 ms, past the 16.7 ms vsync window, so the game locked to 30 fps and
