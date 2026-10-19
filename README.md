@@ -75,7 +75,7 @@ caller's object. In this port that clobbered a callee-saved register inside
 `SDL_CreateMutex` and crashed at boot. `scripts/bootstrap_sdk.sh` patches the
 four types and `PTHREAD_ONCE_INIT` before building musl, libc++ and SDL.
 
-### Signing: program authority ID and auth info
+### Signing and param.sfo: match PacBrew's apps
 
 `create-fself`'s defaults are paid `0x3800000000000011` with no auth info.
 They produce a process that cannot map system flexible memory. On a real
@@ -87,6 +87,11 @@ way PacBrew's `ps4.cmake` `add_self()` signs its apps: paid
 `cmake/srps4_helpers.cmake`). Piglet keeps PacBrew's own configuration from
 the same pinned SDL commit. `patches/sdl/` only routes SDL's PS4 log
 callback through stdio, so its messages reach `last_run.txt` as well as klog.
+
+`param.sfo` likewise follows PacBrew's `add_pkg()`: `CATEGORY` is `gde`
+(non-game application, the class that renders through the VSH Piglet stack)
+rather than `gd`, with `FORMAT = obs` and `SYSTEM_VER = 1020`. Under `gd`,
+signing alone did not fix `EGL_NO_DISPLAY` on a real console.
 
 ### SDK fix: libsamplerate
 

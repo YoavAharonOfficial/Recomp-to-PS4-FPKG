@@ -111,10 +111,14 @@ function(srps4_package target)
         COMMAND ${env} ${pkgtool} sfo_setentry "${sfo}" APP_TYPE --type Integer --maxsize 4 --value 1
         COMMAND ${env} ${pkgtool} sfo_setentry "${sfo}" APP_VER --type Utf8 --maxsize 8 --value "${P_VERSION}"
         COMMAND ${env} ${pkgtool} sfo_setentry "${sfo}" ATTRIBUTE --type Integer --maxsize 4 --value 0
-        COMMAND ${env} ${pkgtool} sfo_setentry "${sfo}" CATEGORY --type Utf8 --maxsize 4 --value gd
+        # "gde" (non-game application), as PacBrew's add_pkg() defaults to:
+        # Piglet is the VSH GL stack non-game apps render with; under "gd"
+        # (game) eglGetDisplay() returned EGL_NO_DISPLAY on a real console.
+        COMMAND ${env} ${pkgtool} sfo_setentry "${sfo}" CATEGORY --type Utf8 --maxsize 4 --value gde
+        COMMAND ${env} ${pkgtool} sfo_setentry "${sfo}" FORMAT --type Utf8 --maxsize 4 --value obs
         COMMAND ${env} ${pkgtool} sfo_setentry "${sfo}" CONTENT_ID --type Utf8 --maxsize 48 --value "${content_id}"
         COMMAND ${env} ${pkgtool} sfo_setentry "${sfo}" DOWNLOAD_DATA_SIZE --type Integer --maxsize 4 --value 0
-        COMMAND ${env} ${pkgtool} sfo_setentry "${sfo}" SYSTEM_VER --type Integer --maxsize 4 --value 0
+        COMMAND ${env} ${pkgtool} sfo_setentry "${sfo}" SYSTEM_VER --type Integer --maxsize 4 --value 1020
         COMMAND ${env} ${pkgtool} sfo_setentry "${sfo}" TITLE --type Utf8 --maxsize 128 --value "${P_TITLE}"
         COMMAND ${env} ${pkgtool} sfo_setentry "${sfo}" TITLE_ID --type Utf8 --maxsize 12 --value "${P_TITLE_ID}"
         COMMAND ${env} ${pkgtool} sfo_setentry "${sfo}" VERSION --type Utf8 --maxsize 8 --value "${P_VERSION}"
