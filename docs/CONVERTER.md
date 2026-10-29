@@ -132,5 +132,38 @@ be bit-exact, checked by present-CRC equality against the unmodified renderer.
 
 ## 7. Results
 
-See `out/<id>-report.md` for each converted title. The Super Metroid run
-that validated this tool is summarized in the README.
+Each converted title gets `out/<id>-report.md`.
+
+**Super Metroid** (`mstan/SuperMetroidRecomp` @ `494df85`, JU ROM). This is
+the first title built through the generic path, with no hand-written build
+file.
+
+Native build and correctness:
+
+- The native build ran on the first attempt.
+- **Renderer patch** (the three §5 optimizations):
+  - Across 12,000 attract-mode frames (title, intro and gameplay demos), the
+    output is CRC-identical to the unmodified renderer.
+  - With the pipeline on, every present equals the synchronous one, one
+    frame later.
+  - `SM_VRAM_VERIFY` found no shared line that differed.
+- **ThreadSanitizer**, 4,200 frames with the pipeline on: no races in the
+  port's or the title's code. The only two reports are inside Mesa's
+  llvmpipe, which the console does not use.
+
+Speed (native, gameplay window):
+
+| Stage | Before | After |
+|---|---|---|
+| Capture | 2.27 ms | 0.78 ms |
+| Compose | 3.8 ms | moved off the main thread |
+
+Console:
+
+- **Estimate:** main thread about 11.2 ms (guest 5.4, capture 4.3, present)
+  and compose thread about 5.9 ms, against a 16.7 ms frame. 60 fps is
+  expected, but this is not yet measured on hardware.
+- **Under shadPS4:** the console eboot (`-O3` + PGO, pipelined) booted with
+  widescreen on, ran 2,400 frames and exited cleanly.
+- **Console against native:** its presents equal the native unmodified
+  renderer's one frame later, all 2,400 of them.

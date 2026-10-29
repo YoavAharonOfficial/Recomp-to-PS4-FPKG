@@ -52,12 +52,14 @@ class Converter:
         self.state_path = None
         self.state = {}
         self.report = []
+        self.stage = "identify"
 
     # ---- utilities -------------------------------------------------------
     def log(self, msg):
         line = f"[srps4-convert] {msg}"
         print(line, flush=True)
         self.report.append(msg)
+        self.state.setdefault("stage_log", {}).setdefault(self.stage, []).append(msg)
 
     def run(self, cmd, stage, cwd=None, env=None, check=True, timeout=None):
         logdir = self.work / self.id / "logs" if getattr(self, "id", None) else self.work
@@ -227,10 +229,13 @@ class Converter:
               f'set(SRPS4_P_DATA_DIR "{slug}")\n'
               'set(SRPS4_P_VERSION "01.00")\n')
         write("version.txt", "1.00-1\n")
-        env_lines, notes = self.widescreen_defaults(d, write)
-        write("env_defaults.txt",
-              "# Package defaults applied before /data/<Title>/srps4_env.txt (which wins).\n"
-              + "".join(f"{l}\n" for l in env_lines))
+        if not (d / "env_defaults.txt").exists():
+            env_lines, notes = self.widescreen_defaults(d, write)
+            write("env_defaults.txt",
+                  "# Package defaults applied before /data/<Title>/srps4_env.txt (which wins).\n"
+                  + "".join(f"{l}\n" for l in env_lines))
+        else:
+            notes = ["widescreen: the profile's existing defaults are kept"]
         if not (d / "icon0.png").exists():
             subprocess.run([sys.executable, str(HERE / "scripts" / "make_icon.py"),
                             str(d / "icon0.png"), self.title, "Recompiled"], check=True)
@@ -494,16 +499,27 @@ class Converter:
         self.run([str(sdk / "bin" / "create-fself"), f"-in={elf}", f"-out={bdir / (tgt + '.emu.oelf')}",
                   "--eboot", str(app / "eboot.bin"), "--paid", "0x3800000000000035"], "emulator",
                  env={"OO_PS4_TOOLCHAIN": str(sdk)})
-        home = self.work / self.id / "emu-home"
-        shutil.rmtree(home, ignore_errors=True)
+        # shadPS4 needs an initialized home (users.json, input config): a
+        # brand-new one stalls at boot, so reuse the one given, resetting only
+        # this title's data directory.
+        if self.a.emu_home:
+            home = Path(self.a.emu_home).resolve()
+        else:
+            home = self.work / self.id / "emu-home"
+            shutil.rmtree(home, ignore_errors=True)
         dd = home / ".local" / "share" / "shadPS4" / "data" / data_dir
+        shutil.rmtree(dd, ignore_errors=True)
         dd.mkdir(parents=True)
         frames = min(self.a.frames, 2400)
         (dd / "srps4_env.txt").write_text(
             f"SDL_VIDEODRIVER=dummy\nSNESRECOMP_RUN_FRAMES={frames}\n"
             f"SNESRECOMP_PRESENT_LOG=/data/{data_dir}/emu_presents.csv\n")
-        self.run(["xvfb-run", "-a", str(emu), "-g", str(app / "eboot.bin")], "emulator",
-                 env={"HOME": str(home)}, check=False, timeout=7200)
+        try:
+            self.run(["xvfb-run", "-a", str(emu), "-g", str(app / "eboot.bin")], "emulator",
+                     env={"HOME": str(home)}, check=False, timeout=self.a.emu_timeout)
+        except subprocess.TimeoutExpired:
+            subprocess.run(["pkill", "-f", f"-g {app / 'eboot.bin'}"])
+            self.log(f"emulator: no exit within {self.a.emu_timeout}s")
         last = dd / "logs" / "last_run.txt"
         txt = last.read_text(errors="replace") if last.exists() else ""
         ok = bool(re.search(r"exit: RUN_FRAMES reached", txt))
@@ -512,15 +528,31 @@ class Converter:
         nonblank = sum(c != "00000000" for c in crcs)
         self.log(f"emulator: console eboot ran {len(crcs)} presents ({nonblank} non-blank), "
                  f"clean exit: {ok}")
+        # The console build against the native synchronous run of the same
+        # input (attract mode): pipelined titles present one frame later.
+        native = self.work / self.id / "present_attract.csv"
+        if native.exists() and crcs:
+            ref = [r["crc32"] for r in csv.DictReader(open(native))]
+            off = 1 if self.has_pipeline() else 0
+            n = min(len(crcs), len(ref) + off) - off
+            mism = sum(1 for k in range(off, off + n) if crcs[k] != ref[k - off])
+            self.log(f"emulator: console presents vs native presents"
+                     f"{' at one-frame offset' if off else ''}: {mism} mismatches of {n}"
+                     + ("" if not mism else " (shadPS4 can differ from native for environmental "
+                        "reasons; boot and clean exit are the gate)"))
         if not ok or nonblank == 0:
             raise SystemExit(f"console eboot failed under shadPS4; see {last}")
 
     def write_report(self):
         self.out.mkdir(parents=True, exist_ok=True)
         rp = self.out / f"{self.id}-report.md"
+        body = ""
+        for st in STAGES:
+            lines = self.state.get("stage_log", {}).get(st)
+            if lines:
+                body += f"\n## {st}\n\n" + "".join(f"- {l}\n" for l in lines)
         rp.write_text(f"# {self.title}: srps4-convert report\n\n"
-                      f"Source: `{self.a.repo}` @ `{self.commit}`\n\n"
-                      + "".join(f"- {l}\n" for l in self.report))
+                      f"Source: `{self.a.repo}` @ `{self.commit}`\n" + body)
         print(f"report: {rp}")
 
     # ---- driver ----------------------------------------------------------
@@ -530,6 +562,13 @@ class Converter:
         self.fetch()
         self.identify()
         self.state_path = self.work / self.id / "state.json"
+        if self.state_path.exists():
+            # Resume: keep earlier stages' results for the report.
+            prev = json.loads(self.state_path.read_text())
+            fresh = self.state.get("stage_log", {})
+            prev.update({k: v for k, v in self.state.items() if k != "stage_log"})
+            prev.setdefault("stage_log", {}).update(fresh)
+            self.state = prev
         self.bn = self.work / self.id / "build-native"
         for i, st in enumerate(STAGES):
             if st in ("fetch", "identify"):
@@ -543,6 +582,8 @@ class Converter:
                 continue
             if st in ("verify", "pgo") and self.a.skip_native:
                 continue
+            self.stage = st
+            self.state.setdefault("stage_log", {})[st] = []
             getattr(self, "write_report" if st == "report" else st)()
             self.state.setdefault("done", []).append(st)
             self.save_state()
@@ -561,6 +602,9 @@ def main():
     ap.add_argument("--emulator", default=os.environ.get("SHADPS4"), help="shadPS4 binary for the smoke test")
     ap.add_argument("--emu-sdk", default=os.environ.get("SRPS4_EMU_SDK"),
                     help="musl-malloc libc dir for the emulator relink (shadPS4 stubs sceLibcMspace)")
+    ap.add_argument("--emu-home", default=os.environ.get("SHADPS4_HOME"),
+                    help="an initialized shadPS4 HOME to reuse (a fresh one stalls at boot)")
+    ap.add_argument("--emu-timeout", type=int, default=2400, help="seconds before the emulator run is abandoned")
     ap.add_argument("--frames", type=int, default=6000, help="frames per attract-mode verification run")
     ap.add_argument("--profile-start", type=int, default=0, help="first profiled frame (skip boot/title)")
     ap.add_argument("--jobs", type=int, default=0)
