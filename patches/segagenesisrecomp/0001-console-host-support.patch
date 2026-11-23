@@ -1,3 +1,92 @@
+diff --git a/runner/audio.c b/runner/audio.c
+index ef618a4..eb7ab8f 100644
+--- a/runner/audio.c
++++ b/runner/audio.c
+@@ -57,6 +57,11 @@ static uint64_t s_trace_final_fill_us;
+ static void genesis_audio_callback(void *user, Uint8 *stream, int len)
+ {
+     (void)user;
++#if defined(SRPS4) && SRPS4_CONSOLE
++    { static int s_first = 1;
++      if (s_first) { s_first = 0; fprintf(stderr, "[srps4-boot] audio: first callback, %d bytes, bridge %s\n",
++                                          len, s_bridge_ready ? "ready" : "not ready"); } }
++#endif
+     if (!s_bridge_ready) { memset(stream, 0, (size_t)len); return; }
+     int frames = len / (int)(2 * sizeof(int16_t)); /* stereo S16 */
+     Uint64 begin = SDL_GetPerformanceCounter();
+diff --git a/runner/fiber_compat.c b/runner/fiber_compat.c
+index 891e3f8..86e557e 100644
+--- a/runner/fiber_compat.c
++++ b/runner/fiber_compat.c
+@@ -25,6 +25,12 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
++#if defined(SRPS4) && SRPS4_CONSOLE
++#include <errno.h>
++#define SRPS4_DIAG(...) fprintf(stderr, "[srps4-boot] " __VA_ARGS__)
++#else
++#define SRPS4_DIAG(...) ((void)0)
++#endif
+ 
+ /* minicoro configuration: assembly switch everywhere we build (Win64,
+  * SysV x86-64, aarch64 — minicoro #errors on anything else), no heap
+@@ -173,8 +179,12 @@ static unsigned char *os_map(size_t size, size_t guard_off, size_t guard_size)
+     return m;
+ #else
+     void *m = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
++    SRPS4_DIAG("fiber mmap size=%zu -> %p (errno %d)\n", size, m, m == MAP_FAILED ? errno : 0);
+     if (m == MAP_FAILED) return NULL;
+-    if (mprotect((unsigned char *)m + guard_off, guard_size, PROT_NONE) != 0) {
++    int prot_rc = mprotect((unsigned char *)m + guard_off, guard_size, PROT_NONE);
++    SRPS4_DIAG("fiber guard mprotect off=%zu size=%zu -> %d (errno %d)\n",
++               guard_off, guard_size, prot_rc, prot_rc ? errno : 0);
++    if (prot_rc != 0) {
+         munmap(m, size);
+         return NULL;
+     }
+@@ -231,7 +241,9 @@ static int fiber_init_coro(fiber_impl *f)
+     desc.storage_size = guard_addr - storage_addr;
+     desc.coro_size    = f->map_size;
+     desc.stack_size   = (size_t)(f->stack_top - guard_addr);
++    SRPS4_DIAG("fiber mco_init storage=%zu stack=%zu\n", desc.storage_size, desc.stack_size);
+     if (mco_init(co, &desc) != MCO_SUCCESS) return -1;
++    SRPS4_DIAG("fiber mco_init ok\n");
+     if ((size_t)co->stack_base != guard_addr) return -1;
+ 
+ #if defined(_WIN32)
+@@ -280,6 +292,7 @@ fiber_t fiber_create(size_t commit, size_t reserve, fiber_entry_fn entry, void *
+ {
+     if (!entry) return NULL;
+     size_t page = os_page_size();
++    SRPS4_DIAG("fiber_create page=%zu commit=%zu\n", page, commit);
+     size_t stack_size = reserve > commit ? reserve : commit;
+     if (stack_size < MCO_MIN_STACK_SIZE) stack_size = MCO_MIN_STACK_SIZE;
+     stack_size = align_up(stack_size, page);
+diff --git a/runner/glue.c b/runner/glue.c
+index 9678eef..e92808b 100644
+--- a/runner/glue.c
++++ b/runner/glue.c
+@@ -1415,6 +1415,9 @@ void glue_init(const cc_u8l *rom_bytes, cc_u32l rom_byte_len)
+      * leftover copy from an older runner is only misleading. */
+     {
+         extern const char *exe_relative(const char *);
++#if defined(SRPS4) && SRPS4_CONSOLE
++        fprintf(stderr, "[srps4-boot] glue: evidence loaded\n");
++#endif
+         remove(exe_relative("interp_fallbacks.log"));
+     }
+ 
+@@ -1426,6 +1429,9 @@ void glue_init(const cc_u8l *rom_bytes, cc_u32l rom_byte_len)
+     }
+ 
+ 
++#if defined(SRPS4) && SRPS4_CONSOLE
++    fprintf(stderr, "[srps4-boot] glue: ROM copied, creating the game fiber\n");
++#endif
+     g_step2_active = 1;
+     s_main_fiber = fiber_convert_thread();
+     if (!s_main_fiber) {
 diff --git a/runner/main.c b/runner/main.c
 index 6653125..551ce12 100644
 --- a/runner/main.c
