@@ -58,6 +58,10 @@ function(srps4_add_host target)
         # (no mremap on PS4); shrinks keep the block (srps4_realloc.c).
         target_sources(${target} PRIVATE ${SRPS4_ROOT}/src/srps4_realloc.c)
         target_link_options(${target} PRIVATE "LINKER:--wrap=realloc")
+        # New threads inherit the main thread's core-0 pin; move them to
+        # cores 2-5 (srps4_threads.c).
+        target_sources(${target} PRIVATE ${SRPS4_ROOT}/src/srps4_threads.c)
+        target_link_options(${target} PRIVATE "LINKER:--wrap=pthread_create")
         # SDL 2.0.22+ calls the title may make against PacBrew's SDL 2.0.18
         # (srps4_sdl_compat.c), declared through a force-included header.
         target_sources(${target} PRIVATE ${SRPS4_ROOT}/src/srps4_sdl_compat.c)

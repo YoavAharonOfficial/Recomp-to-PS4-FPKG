@@ -52,6 +52,8 @@ All of it is under `#if defined(SRPS4)`; the desktop build is unchanged.
 | Pacer target 60.00 Hz instead of 59.94 | Output is a fixed 60 Hz with vsync. At 59.94 one vblank in every ~1,000 gets no new picture, a hitch every ~17 s. Audio DRC absorbs the 0.1% |
 | Vsync is the frame clock | Waiting for the software pacer and then for the next vblank ran two 60 Hz clocks against each other: stutter, plus a frame of input lag, whenever their phases drifted. The pacer now stands in only if presents stop being vsync-throttled |
 | SDL audio thread moved to core 1 | The main thread is pinned to core 0 before SDL starts and FreeBSD threads inherit their creator's cpuset, so the audio callback shared a core with ~13 ms of emulation per frame (crackle) |
+| Audio makeup gain + soft limiter | The native mix peaks near -7 dBFS at about -26 dBFS RMS, 8-10 dB under mastered soundtrack releases. +6 dB by default (`SRPS4_AUDIO_GAIN_DB`), bending smoothly into full scale above -3 dBFS |
+| Smaller audio queue | The 200 ms boot cushion drained at the servo's 0.5% limit, so audio trailed the picture by ~0.2 s for half a minute. Target and preroll 40 ms, 512-sample device buffer (`SRPS4_AUDIO_TARGET_MS`, `SRPS4_AUDIO_SAMPLES`) |
 | `[srps4-perf]` line every 600 frames | Simulation (incl. widescreen rendering), audio, present and rewind costs, plus frame intervals over 18 ms, written to the log |
 
 ## Port-layer additions (all titles)
@@ -60,6 +62,7 @@ All of it is under `#if defined(SRPS4)`; the desktop build is unchanged.
 |---|---|
 | `src/srps4_pagesize.c` | `sysconf` resolves to libkernel, which uses FreeBSD's `_SC_*` numbers; titles pass musl's. `_SC_PAGESIZE` (musl 30) came back 4096 on retail, but pages are 16 KiB, so the game-fiber guard page rounded down over the fiber header and the first boot crashed. Names are translated and the page size is floored at 16 KiB. (shadPS4 answers 16384 to any name, which hid it.) |
 | `src/srps4_realloc.c` | PacBrew musl's `realloc` shrinks mmapped (>~224 KiB) blocks with `mremap`, which PS4 lacks; its fallback copies the *old* size into the smaller new block and overruns the next chunk. The rewind ring shrinks its snapshot buffer entering a special stage: the next `malloc` crashed. Shrinks now keep the block. Found with a hardware watchpoint under shadPS4 |
+| `src/srps4_threads.c` | The main thread is pinned to core 0 before the title starts and FreeBSD threads inherit their creator's cpuset, so SDL's audio thread, the engine worker and file writers all shared the emulation core. New threads now start on cores 2-5 (`SRPS4_THREAD_CORES`), set by the thread itself before the title's entry so self-pinning threads still win |
 | `src/srps4_sdl_compat.{c,h}` | `SDL_RenderGetWindow` (2.0.22) and `SDL_ResetHint` (2.24) for PacBrew's SDL 2.0.18. The header is force-included into the title's hand-written C only (never the generated C, so a flag change does not recompile it). The renderer→window map is recorded by wrapping `SDL_CreateRenderer` |
 
 ## Sonic 3 & Knuckles (`games/sonic3k`)
@@ -73,7 +76,10 @@ All of it is under `#if defined(SRPS4)`; the desktop build is unchanged.
 - Pad (PacBrew's SDL mapping): Cross/Circle/Square = B/A/C (all jump),
   OPTIONS = Start, touchpad click = Mode, OPTIONS+R1 = save-state menu,
   OPTIONS+R3 = rewind.
-- Sound: Clone Driver + Mega PCM on by default (`sonic3k-sound.ini`,
+- Sound: enhanced FM on by default (`env_defaults.txt`: a second, ladder-free
+  YM3438 model with the hardware output low-pass relaxed, verified against the
+  canonical chip and substituted only after a proven window; it runs on the
+  engine worker), `bypass_filter = 1`, and Clone Driver + Mega PCM (`sonic3k-sound.ini`,
   `enabled=0` for the original driver); no measurable cost.
 - Data: `/data/Sonic3K/` holds `settings.ini`, the SRAM save, rewind and
   `logs/`.

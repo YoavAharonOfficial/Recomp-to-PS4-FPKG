@@ -1,8 +1,17 @@
 diff --git a/runner/audio.c b/runner/audio.c
-index ef618a4..c6448bf 100644
+index ef618a4..447b3da 100644
 --- a/runner/audio.c
 +++ b/runner/audio.c
-@@ -57,6 +57,21 @@ static uint64_t s_trace_final_fill_us;
+@@ -3,6 +3,8 @@
+ #include <SDL2/SDL.h>
+ #include <stdio.h>
+ #include <string.h>
++#include <math.h>
++#include <stdlib.h>
+ 
+ /* Shared clock-domain bridge: persistent band-limited polyphase resampler + a
+  * P-only normalized-fill controller, plus Phase-1 stall concealment (boot
+@@ -57,10 +59,54 @@ static uint64_t s_trace_final_fill_us;
  static void genesis_audio_callback(void *user, Uint8 *stream, int len)
  {
      (void)user;
@@ -24,6 +33,78 @@ index ef618a4..c6448bf 100644
      if (!s_bridge_ready) { memset(stream, 0, (size_t)len); return; }
      int frames = len / (int)(2 * sizeof(int16_t)); /* stereo S16 */
      Uint64 begin = SDL_GetPerformanceCounter();
+     rab_pull(&s_bridge, (int16_t *)stream, frames);
++#if defined(SRPS4) && SRPS4_CONSOLE
++    {   /* snesrecomp-ps4: makeup gain with a soft limiter. The native mix peaks
++         * near -7 dBFS with about -26 dBFS RMS in play, roughly 8-10 dB under
++         * mastered soundtrack releases, so it sounds thin on a TV/AV system.
++         * Gain is SRPS4_AUDIO_GAIN_DB (default +6, 0 = off); above -3 dBFS
++         * the curve bends smoothly into full scale instead of clipping. */
++        static float s_gain = -1.0f;
++        if (s_gain < 0.0f) {
++            const char *g = getenv("SRPS4_AUDIO_GAIN_DB");
++            float db = g && *g ? (float)atof(g) : 6.0f;
++            if (db < 0.0f) db = 0.0f; else if (db > 18.0f) db = 18.0f;
++            s_gain = powf(10.0f, db / 20.0f);
++        }
++        if (s_gain > 1.0f) {
++            int16_t *pcm = (int16_t *)stream;
++            const float knee = 0.7079f;           /* -3 dBFS */
++            for (int i = 0; i < frames * 2; ++i) {
++                float x = pcm[i] * (s_gain / 32768.0f), m = fabsf(x);
++                if (m > knee) {
++                    float over = (m - knee) / (1.0f - knee);
++                    m = knee + (1.0f - knee) * tanhf(over);
++                    x = x < 0 ? -m : m;
++                }
++                int v = (int)lrintf(x * 32767.0f);
++                pcm[i] = (int16_t)(v > 32767 ? 32767 : v < -32768 ? -32768 : v);
++            }
++        }
++    }
++#endif
+     uint32_t elapsed = (uint32_t)((SDL_GetPerformanceCounter() - begin)
+                                 * 1000000ull / s_perf_freq);
+     if (elapsed > s_callback_peak_us) s_callback_peak_us = elapsed;
+@@ -166,6 +212,12 @@ int audio_init(int psg_sample_rate)
+     want.format   = AUDIO_S16SYS;
+     want.channels = 2;
+     want.samples  = 1024;
++#if defined(SRPS4) && SRPS4_CONSOLE
++    /* snesrecomp-ps4: the audio thread has its own core on the console, so
++     * the device buffer can shrink (SRPS4_AUDIO_SAMPLES, default 512). */
++    { const char *e = getenv("SRPS4_AUDIO_SAMPLES"); int v = e && *e ? atoi(e) : 512;
++      want.samples = (Uint16)(v >= 256 && v <= 4096 ? v : 512); }
++#endif
+     want.callback = genesis_audio_callback;
+ 
+     /* Allow SDL to renegotiate the request; the bridge keys off got.freq. */
+@@ -191,6 +243,14 @@ int audio_init(int psg_sample_rate)
+      * pitch-preserving loop of recent audio instead of fading to silence. */
+     cfg.preroll_ms     = 200.0;
+     cfg.stretch_enable = 1;     /* conceal on (defaults to 1; pinned explicit) */
++#if defined(SRPS4) && SRPS4_CONSOLE
++    /* snesrecomp-ps4: a 200 ms boot cushion drains at the servo's 0.5% limit,
++     * so audio trailed the picture by ~0.2 s for half a minute. Prime and hold
++     * a smaller queue (SRPS4_AUDIO_TARGET_MS, default 40; preroll follows it). */
++    { const char *e = getenv("SRPS4_AUDIO_TARGET_MS"); double v = e && *e ? atof(e) : 40.0;
++      if (v < 20.0) v = 20.0; else if (v > 150.0) v = 150.0;
++      cfg.target_ms = v; cfg.preroll_ms = v; }
++#endif
+     if (rab_init(&s_bridge, &cfg) != 0) {
+         fprintf(stderr, "audio: rab_init (DRC bridge) failed\n");
+         SDL_CloseAudioDevice(s_dev); s_dev = 0;
+@@ -208,8 +268,8 @@ int audio_init(int psg_sample_rate)
+      * reaches the pre-roll fill, then fades in (clean startup, no edge click). */
+     SDL_PauseAudioDevice(s_dev, 0);
+     fprintf(stderr, "[audio] DRC bridge: %d Hz internal -> %d Hz device "
+-            "(preroll %.0f ms, conceal %s)\n",
+-            psg_sample_rate, got.freq, cfg.preroll_ms,
++            "(preroll %.0f ms, target %.0f ms, %u-sample device buffer, conceal %s)\n",
++            psg_sample_rate, got.freq, cfg.preroll_ms, cfg.target_ms, (unsigned)got.samples,
+             cfg.stretch_enable ? "on" : "off");
+     return 0;
+ }
 diff --git a/runner/fiber_compat.c b/runner/fiber_compat.c
 index 891e3f8..86e557e 100644
 --- a/runner/fiber_compat.c
