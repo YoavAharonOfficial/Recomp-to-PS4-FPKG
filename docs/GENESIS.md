@@ -56,6 +56,7 @@ All of it is under `#if defined(SRPS4)`; the desktop build is unchanged.
 
 | File | What |
 |---|---|
+| `src/srps4_pagesize.c` | `sysconf` resolves to libkernel, which uses FreeBSD's `_SC_*` numbers; titles pass musl's. `_SC_PAGESIZE` (musl 30) came back 4096 on retail, but pages are 16 KiB, so the game-fiber guard page rounded down over the fiber header and the first boot crashed. Names are translated and the page size is floored at 16 KiB. (shadPS4 answers 16384 to any name, which hid it.) |
 | `src/srps4_sdl_compat.{c,h}` | `SDL_RenderGetWindow` (2.0.22) and `SDL_ResetHint` (2.24) for PacBrew's SDL 2.0.18. The header is force-included into the title's hand-written C only (never the generated C, so a flag change does not recompile it). The renderer→window map is recorded by wrapping `SDL_CreateRenderer` |
 
 ## Sonic 3 & Knuckles (`games/sonic3k`)

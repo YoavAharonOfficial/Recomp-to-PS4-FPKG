@@ -50,6 +50,10 @@ function(srps4_add_host target)
     if(SRPS4_TARGET_PS4)
         # musl's (Linux) clock ids -> libkernel's (FreeBSD); see srps4_time.c.
         target_link_options(${target} PRIVATE "LINKER:--wrap=clock_gettime")
+        # sysconf resolves to libkernel (FreeBSD _SC_* numbers); titles use
+        # musl's. Translate, and report the real 16 KiB page (srps4_pagesize.c).
+        target_sources(${target} PRIVATE ${SRPS4_ROOT}/src/srps4_pagesize.c)
+        target_link_options(${target} PRIVATE "LINKER:--wrap=sysconf")
         # SDL 2.0.22+ calls the title may make against PacBrew's SDL 2.0.18
         # (srps4_sdl_compat.c), declared through a force-included header.
         target_sources(${target} PRIVATE ${SRPS4_ROOT}/src/srps4_sdl_compat.c)
