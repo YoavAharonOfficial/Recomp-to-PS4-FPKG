@@ -1,15 +1,25 @@
 diff --git a/runner/audio.c b/runner/audio.c
-index ef618a4..eb7ab8f 100644
+index ef618a4..c6448bf 100644
 --- a/runner/audio.c
 +++ b/runner/audio.c
-@@ -57,6 +57,11 @@ static uint64_t s_trace_final_fill_us;
+@@ -57,6 +57,21 @@ static uint64_t s_trace_final_fill_us;
  static void genesis_audio_callback(void *user, Uint8 *stream, int len)
  {
      (void)user;
 +#if defined(SRPS4) && SRPS4_CONSOLE
 +    { static int s_first = 1;
-+      if (s_first) { s_first = 0; fprintf(stderr, "[srps4-boot] audio: first callback, %d bytes, bridge %s\n",
-+                                          len, s_bridge_ready ? "ready" : "not ready"); } }
++      if (s_first) {
++        /* The main thread is pinned to core 0 before SDL starts, and FreeBSD
++         * threads inherit their creator's cpuset: SDL's audio thread would
++         * share core 0 with ~13 ms of emulation per frame and miss its
++         * deadlines (crackle). Give it core 1. */
++        extern unsigned long srps4_current_affinity(void);
++        extern void srps4_pin_current_thread(unsigned core);
++        unsigned long before = srps4_current_affinity();
++        srps4_pin_current_thread(1);
++        s_first = 0;
++        fprintf(stderr, "[srps4-boot] audio: first callback, %d bytes, bridge %s; thread cores 0x%lx -> 0x%lx\n",
++                len, s_bridge_ready ? "ready" : "not ready", before, srps4_current_affinity()); } }
 +#endif
      if (!s_bridge_ready) { memset(stream, 0, (size_t)len); return; }
      int frames = len / (int)(2 * sizeof(int16_t)); /* stereo S16 */
@@ -88,7 +98,7 @@ index 9678eef..e92808b 100644
      s_main_fiber = fiber_convert_thread();
      if (!s_main_fiber) {
 diff --git a/runner/main.c b/runner/main.c
-index 6653125..551ce12 100644
+index 6653125..7b41755 100644
 --- a/runner/main.c
 +++ b/runner/main.c
 @@ -2487,6 +2487,11 @@ int main(int argc, char *argv[])
@@ -150,7 +160,44 @@ index 6653125..551ce12 100644
      fprintf(stderr, "[pacer] target frame rate: %.4f fps\n", target_fps);
      int debug_port = debug_port_cli ? debug_port_cli :
                       (debug_port_from_ini ? debug_port_from_ini :
-@@ -4387,6 +4417,37 @@ session_begin:;
+@@ -4371,10 +4401,36 @@ session_begin:;
+         } else {
+             presentation_clock_reset(&presentation_clock);
+             Uint64 now=SDL_GetPerformanceCounter();
++#if defined(SRPS4) && SRPS4_CONSOLE
++            /* snesrecomp-ps4: the console's vsync is the frame clock. Waiting
++             * for the software pacer AND then for the next vblank runs two
++             * 60 Hz clocks against each other: whenever their phases drift a
++             * frame waits most of an extra refresh (stutter plus a frame of
++             * input lag). With vsync on, skip the pacer wait. If presents
++             * arrive faster than any vblank could allow (30 intervals under
++             * 14 ms in a row), vsync is not throttling: the pacer resumes. */
++            static int s_pacer_fallback, s_fast;
++            static Uint64 s_last_present_end;
++            int vsync_paced=presentation_vsync && !s_pacer_fallback;
++            if(!turbo && !runtime_uncapped && !vsync_paced && now<guest_deadline)
++                genesis_host_wait_until(guest_deadline,perf_frequency);
++            draw_load_hold(renderer);
++            SDL_RenderPresent(renderer);++presentation_count;
++            Uint64 present_end=SDL_GetPerformanceCounter();
++            if(vsync_paced && !turbo && !runtime_uncapped && s_last_present_end) {
++                Uint64 interval_us=(present_end-s_last_present_end)*1000000ull/perf_frequency;
++                if(interval_us<14000){if(++s_fast>=30){s_pacer_fallback=1;
++                    fprintf(stderr,"[srps4] presents are not vsync-throttled; software pacer resumes\n");}}
++                else s_fast=0;
++            }
++            s_last_present_end=present_end;
++            if(vsync_paced)frame_pacer_reset(&frame_pacer);
++#else
+             if(!turbo && !runtime_uncapped && now<guest_deadline)
+                 genesis_host_wait_until(guest_deadline,perf_frequency);
+             draw_load_hold(renderer);
+             SDL_RenderPresent(renderer);++presentation_count;
++#endif
+         }
+         FRAME_PHASE(8);
+ #if GENESIS_HAS_RECOMP_NET
+@@ -4387,6 +4443,37 @@ session_begin:;
                                              s_screen_width, s_screen_height);
          }
          FRAME_PHASE(6);
