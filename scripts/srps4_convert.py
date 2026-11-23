@@ -507,6 +507,10 @@ class Converter:
         else:
             home = self.work / self.id / "emu-home"
             shutil.rmtree(home, ignore_errors=True)
+        # Current shadPS4 asks (a blocking SDL message box) whether to migrate
+        # old saves when user 1000's home does not exist yet: create it first.
+        for sub in ("savedata", "trophy", "inputs"):
+            (home / ".local" / "share" / "shadPS4" / "home" / "1000" / sub).mkdir(parents=True, exist_ok=True)
         dd = home / ".local" / "share" / "shadPS4" / "data" / data_dir
         shutil.rmtree(dd, ignore_errors=True)
         dd.mkdir(parents=True)

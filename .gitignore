@@ -10,3 +10,6 @@ work/
 build-*.log
 *.profraw
 *.profdata
+# Genesis ROMs; PGO profiles are rebuilt by scripts/pgo_train*.sh
+*.bin
+*.profdata

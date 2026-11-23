@@ -289,6 +289,25 @@ gates and the per-title optimization playbook are in `docs/CONVERTER.md`.
 | Mega Man X | curated (`games/megamanx`) | preloaded mod, 16:9 | VRAM sharing, parallel and pipelined compose |
 | Super Metroid | generic (`games/supermetroid`) | `sm-video.ini` / `SNESRECOMP_WIDESCREEN` | VRAM sharing, parallel and pipelined compose |
 
+## Genesis titles: Sonic 3 & Knuckles
+
+mstan's Genesis recompilations share the `segagenesisrecomp` engine. They
+build with the same host layer, SDK and packaging, from the title's own
+`CMakeLists.txt` with this port injected (`docs/GENESIS.md`):
+
+```
+SRPS4_SDK=~/ps4sdk scripts/build_genesis.sh --game sonic3k --rom ~/sonic3k.bin
+scripts/pgo_train_genesis.sh --game sonic3k --game-root work/sonic3k   # optional, then rebuild
+```
+
+| Title | Profile | Widescreen | Status |
+|---|---|---|---|
+| Sonic 3 & Knuckles (lock-on) | `games/sonic3k` | the title's own 16:9 renderer, 398×224 | console eboot bit-identical to desktop under shadPS4 (1,800 frames); Jaguar estimate ~13 ms/frame average |
+
+Controls: Cross/Circle/Square = jump (B/A/C), OPTIONS = Start, touchpad
+click = Mode, OPTIONS+R1 = save-state menu, OPTIONS+R3 = rewind. Data and
+logs: `/data/Sonic3K/`.
+
 ## Limits and honesty
 
 - Not yet verified on retail hardware by the author. The pkg validates

@@ -1,5 +1,5 @@
 diff --git a/runner/main.c b/runner/main.c
-index 6653125..771c5aa 100644
+index 6653125..551ce12 100644
 --- a/runner/main.c
 +++ b/runner/main.c
 @@ -2487,6 +2487,11 @@ int main(int argc, char *argv[])
@@ -61,6 +61,44 @@ index 6653125..771c5aa 100644
      fprintf(stderr, "[pacer] target frame rate: %.4f fps\n", target_fps);
      int debug_port = debug_port_cli ? debug_port_cli :
                       (debug_port_from_ini ? debug_port_from_ini :
+@@ -4387,6 +4417,37 @@ session_begin:;
+                                             s_screen_width, s_screen_height);
+         }
+         FRAME_PHASE(6);
++#if defined(SRPS4) && SRPS4_CONSOLE
++        /* snesrecomp-ps4: a per-600-frame cost summary in the log (ms,
++         * average/maximum): simulation incl. widescreen rendering, the
++         * texture upload + vsync wait + present, and frame intervals over
++         * 18 ms (a missed vblank). No I/O between reports. */
++        if (!turbo && !benchmark_frames) {
++            static uint64_t s_sum[9]; static uint32_t s_max[9], s_n, s_late, s_max_iv;
++            static Uint64 s_prev_end;
++            for (int i = 0; i < 9; ++i) {
++                s_sum[i] += phase_us[i];
++                if (phase_us[i] > s_max[i]) s_max[i] = phase_us[i];
++            }
++            if (s_prev_end) {
++                uint32_t iv = (uint32_t)((phase_start - s_prev_end) * 1000000ull / host_perf_freq);
++                if (iv > 18000) ++s_late;
++                if (iv > s_max_iv) s_max_iv = iv;
++            }
++            s_prev_end = phase_start;
++            if (++s_n == 600) {
++#define SRPS4_MS(i) s_sum[i] / 600.0 / 1000.0, s_max[i] / 1000.0
++                fprintf(stderr, "[srps4-perf] frame=%u sim=%.2f/%.2f audio=%.2f/%.2f "
++                        "present=%.2f/%.2f rewind=%.2f/%.2f other=%.2f late=%u max_interval=%.1f\n",
++                        frame_num, SRPS4_MS(1), SRPS4_MS(4), SRPS4_MS(8), SRPS4_MS(6),
++                        (s_sum[0] + s_sum[3] + s_sum[5] + s_sum[7]) / 600.0 / 1000.0,
++                        s_late, s_max_iv / 1000.0);
++#undef SRPS4_MS
++                memset(s_sum, 0, sizeof s_sum); memset(s_max, 0, sizeof s_max);
++                s_n = s_late = s_max_iv = 0;
++            }
++        }
++#endif
+ #if GEN_ENABLE_TRACE
+         if (s_debug_enabled) cmd_server_record_timing(frame_num-1,phase_us);
+ #endif
 diff --git a/runner/video/genesis_hd_gpu.c b/runner/video/genesis_hd_gpu.c
 index 1530cfd..1ffff96 100644
 --- a/runner/video/genesis_hd_gpu.c

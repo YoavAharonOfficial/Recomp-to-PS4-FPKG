@@ -33,7 +33,6 @@ function(srps4_add_host target)
         ${SRPS4_ROOT}/src/srps4_log.c
         ${SRPS4_ROOT}/src/srps4_time.c
         ${SRPS4_ROOT}/src/srps4_affinity.c
-        ${SRPS4_ROOT}/src/srps4_mman.c
         ${SRPS4_ROOT}/src/srps4_ucontext.c
         ${SRPS4_ROOT}/src/srps4_ucontext.S)
 
@@ -51,8 +50,6 @@ function(srps4_add_host target)
     if(SRPS4_TARGET_PS4)
         # musl's (Linux) clock ids -> libkernel's (FreeBSD); see srps4_time.c.
         target_link_options(${target} PRIVATE "LINKER:--wrap=clock_gettime")
-        # ...and mmap flags / sysconf names (srps4_mman.c).
-        target_link_options(${target} PRIVATE "LINKER:--wrap=mmap" "LINKER:--wrap=sysconf")
         # SDL 2.0.22+ calls the title may make against PacBrew's SDL 2.0.18
         # (srps4_sdl_compat.c), declared through a force-included header.
         target_sources(${target} PRIVATE ${SRPS4_ROOT}/src/srps4_sdl_compat.c)

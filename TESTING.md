@@ -111,3 +111,32 @@ directory is `/data/SuperMetroid/`, and the log is `logs/last_run.txt`.
   `stage=` summary and a `[sm pipe]` line every 600 frames, the same as for
   Mega Man X.
 - **Saves** are battery SRAM in `/data/SuperMetroid/saves/save.srm`.
+
+## Sonic 3 & Knuckles (`scripts/build_genesis.sh`)
+
+Install `IV0000-SKNR00001_00-SONIC3KRECOMP000.pkg` the same way. The tile
+reads **Sonic 3 & Knuckles** (title ID `SKNR00001`). Data lives in
+`/data/Sonic3K/`; the log is `logs/last_run.txt`.
+
+| Expect | If not |
+|---|---|
+| The SEGA logo, then the title screen, filling a 16:9 TV | Send `logs/last_run.txt` |
+| Widescreen gameplay (398×224, more of the level, not stretched) | `settings.ini`, `[mods.widescreen] enabled = 1` |
+| 60 fps | Send the `[srps4-perf]` lines (below) |
+
+- **Controls:** Cross/Circle/Square jump (B/A/C), OPTIONS = Start,
+  touchpad click = Mode. OPTIONS+R1 opens the save-state menu and
+  OPTIONS+R3 the rewind view. Remap in `settings.ini`, `[input.p1]`
+  (`pad.<Button>=button:<SDL controller button>`).
+- **Performance log:** every 600 frames the log gets one line:
+  `[srps4-perf] frame=… sim=avg/max audio=… present=… rewind=… late=N max_interval=…`
+  (milliseconds). `sim` is emulation plus the widescreen renderer, the part
+  that has to fit in 16.7 ms. `late` counts frames that missed a vblank.
+  Play Angel Island for a minute and send these lines; they decide whether
+  the renderer needs to move to worker threads, as Mega Man X's did.
+- **Scaling:** nearest-neighbour by default. `[video] linear_filter=1` in
+  `settings.ini` smooths the 4.82× vertical scale.
+- **Environment overrides:** `/data/Sonic3K/srps4_env.txt` takes
+  `KEY=VALUE` lines, as for the other titles.
+- **Saves:** battery SRAM `sonic3k.srm`; save states and rewind are in the
+  same directory.
