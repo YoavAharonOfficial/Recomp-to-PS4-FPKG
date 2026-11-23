@@ -14,7 +14,7 @@ scripts/build_genesis.sh --game sonic3k --rom /path/sonic3k.bin
 
 ```
 title repo @ pin ──► patches/segagenesisrecomp/*.patch   (engine: console host support)
-                └──► games/<id>/patches/*.patch          (title: launcher-stub hook)
+                └──► games/<id>/patches/*.patch          (title: launcher-stub hook, renderer)
      │
      ├─ native release build ─► GenesisRecomp, M68kStepRecomp  (generator tools)
      │                          (+ the title's Clone Driver software, reused)
@@ -55,6 +55,7 @@ All of it is under `#if defined(SRPS4)`; the desktop build is unchanged.
 | Audio makeup gain + soft limiter | The native mix peaks near -7 dBFS at about -26 dBFS RMS, 8-10 dB under mastered soundtrack releases. +6 dB by default (`SRPS4_AUDIO_GAIN_DB`), bending smoothly into full scale above -3 dBFS |
 | Smaller audio queue | The 200 ms boot cushion drained at the servo's 0.5% limit, so audio trailed the picture by ~0.2 s for half a minute. Target and preroll 40 ms, 512-sample device buffer (`SRPS4_AUDIO_TARGET_MS`, `SRPS4_AUDIO_SAMPLES`) |
 | `[srps4-perf]` line every 600 frames | Simulation (incl. widescreen rendering), audio, present and rewind costs, plus frame intervals over 18 ms, written to the log |
+| Optional `genesis_video_flush_deferred()` after each simulation step | A title renderer that defers rows to worker threads (Sonic 3 & Knuckles, below) finishes them before anything reads the frame. Weak symbol; absent in other titles |
 
 ## Port-layer additions (all titles)
 
@@ -83,6 +84,36 @@ All of it is under `#if defined(SRPS4)`; the desktop build is unchanged.
   `enabled=0` for the original driver); no measurable cost.
 - Data: `/data/Sonic3K/` holds `settings.ini`, the SRAM save, rewind and
   `logs/`.
+
+### Widescreen rows off the emulation thread (`patches/0002-deferred-rows.patch`)
+
+The title's 398-px renderer drew every row inline, on the emulation core, at
+its raster time: about 80% of a gameplay frame. During level play the
+renderer now records each row (lines 1-223) instead of drawing it, with the
+per-line state the raster would have used: CRAM, VSRAM, registers, and the
+HUD digit pixels. At the end of active display it draws the recorded rows on
+four worker threads (cores 2-5) plus the emulation thread, then composites
+the overlay pixels captured for each row. Line 0, menus, special and bonus
+stages, competition and the interpolated presentation mode stay inline.
+
+What makes this exact rather than approximate:
+
+- Rows read the line-0 snapshots (VRAM, world RAM) the inline path already
+  used. A direct RAM read inside a row job reads the world snapshot; an
+  instrumented run checked that no RAM the renderer reads during active
+  display differs from that snapshot.
+- Lazily decoded art caches (13 of them) are published only after decoding
+  completes, under a lock, so a concurrent row never reads a half-decoded
+  cache. Code that keeps static scratch (preview and margin-pose overlays)
+  runs under one lock. The sprite-priority buffer is per thread.
+- A worker claims a job only for the batch it was woken for, so a worker that
+  wakes late can never take a later frame's rows.
+- Rows are drawn before vertical blank, which replaces sprite patterns and
+  presentation banks the rows still read.
+
+`GENESIS_S3_ROW_WORKERS=N` (in `srps4_env.txt`) sets the worker count; 0
+draws inline as before. The log reports coverage every 600 frames
+(`[s3-video] deferred rows: 223.0 of 224 per frame`).
 
 ## Validation
 
@@ -121,7 +152,21 @@ the Jaguar factor calibrated on Mega Man X (about 5.5× a desktop core).
   factor's uncertainty. The `[srps4-perf]` line in
   `/data/Sonic3K/logs/last_run.txt` reports the real numbers every 600
   frames.
-- **If it dips:** the fix is the one Mega Man X needed: render the
-  widescreen rows off the emulation thread (the renderer already reads
-  per-frame snapshots plus per-line palette/scroll, so rows can be queued
-  to workers), and move FM synthesis to the existing engine worker.
+- **Measured on the console (1.00-3):** about 13 ms of simulation in
+  ordinary play, but 14-17 ms averages with 18-24 ms peaks in heavy stretches
+  (Angel Island on fire: 470 of 600 frames late). The widescreen renderer
+  was the cause.
+- **Since 1.00-4** those rows are drawn on five threads (above). Natively,
+  with only one extra thread on a two-core machine, the same gameplay input
+  drops from 2.29 to 1.61 ms per frame (state hash identical). With the
+  renderer at ~80% of a level frame split over five cores, the Jaguar
+  estimate for those 13-24 ms frames is roughly 5-9 ms.
+- **Exactness:** per-frame framebuffer hashes are identical with 0 and 4
+  workers over all four regression inputs (attract 12,000 frames, gameplay
+  4,000, fuzz 5,859, native services 8,000) plus a special-stage run, and the
+  console eboot under shadPS4 gives identical hashes and machine state with
+  0 and 4 workers over 2,200 frames. ThreadSanitizer, with the renderer
+  instrumented, reports no races in it over the same inputs.
+- **PGO** now trains with the shipped `settings.ini`, `env_defaults.txt` and
+  the profile's `PGO_ENV` (renderer workers on), i.e. the configuration the
+  console runs.

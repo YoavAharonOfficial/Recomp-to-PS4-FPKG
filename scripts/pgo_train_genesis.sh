@@ -36,10 +36,18 @@ cmake -S "$ROOT" -B "$B" -G Ninja -DCMAKE_BUILD_TYPE=Release \
     -DGENESIS_NATIVE_IPO=OFF
 ninja -C "$B" "$GAME_TARGET"
 RAW="$B/profraw"; rm -rf "$RAW"; mkdir -p "$RAW"
+# Train the configuration the console runs: the shipped settings files and
+# environment defaults, plus the profile's PGO_ENV (e.g. renderer workers).
+ENV=()
+[ -f "$PROFILE/env_defaults.txt" ] && while IFS= read -r l; do
+  case "$l" in ''|'#'*) ;; *) ENV+=("$l");; esac
+done < "$PROFILE/env_defaults.txt"
+for e in ${PGO_ENV:-}; do ENV+=("$e"); done
 for s in $PGO_SCRIPTS; do
   D=$(mktemp -d)
+  [ -d "$PROFILE/defaults" ] && cp -r "$PROFILE/defaults/." "$D/"
   echo "training: $s ($PGO_FRAMES frames)"
-  (cd "$B" && GENESIS_USER_DIR="$D" SDL_AUDIODRIVER=dummy LLVM_PROFILE_FILE="$RAW/%p.profraw" \
+  (cd "$B" && env "${ENV[@]}" GENESIS_USER_DIR="$D" SDL_AUDIODRIVER=dummy LLVM_PROFILE_FILE="$RAW/%p.profraw" \
      xvfb-run -a -s "-screen 0 1920x1080x24" "./$GAME_TARGET" "$ROOT/$ROM_STAGE_NAME" \
      --benchmark "$PGO_FRAMES" --input-script "$ROOT/$s" >"$D.log" 2>&1) ||
      { echo "  run failed, see $D.log" >&2; continue; }

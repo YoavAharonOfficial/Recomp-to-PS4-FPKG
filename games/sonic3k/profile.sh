@@ -8,3 +8,5 @@ GAME_TARGET=Sonic3KRecomp
 # across several zones, Angel Island gameplay with jumps, spindash/reverse fuzz).
 PGO_SCRIPTS="tests/regression/sonic3k_attract_12000.input tests/regression/sonic3k_benchmark_gameplay.input tests/regression/sonic3k_gameplay_fuzz.input"
 PGO_FRAMES=12000
+# Train the deferred widescreen rows too (the console draws them on workers).
+PGO_ENV="GENESIS_S3_ROW_WORKERS=2"

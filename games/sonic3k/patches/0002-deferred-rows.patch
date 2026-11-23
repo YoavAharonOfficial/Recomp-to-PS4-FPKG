@@ -1,0 +1,582 @@
+diff --git a/game/common/sonic3_aiz_join.inc b/game/common/sonic3_aiz_join.inc
+index 5158039..8c18978 100644
+--- a/game/common/sonic3_aiz_join.inc
++++ b/game/common/sonic3_aiz_join.inc
+@@ -10,8 +10,8 @@ static int s_aiz_ship_art_attempted,s_aiz_ship_art_ready;
+ 
+ static int aiz_join_load(void)
+ {
+-    if(s_aiz_join_attempted)return s_aiz_join_ready;
+-    s_aiz_join_attempted=1;load_aiz_art();
++    ROWS_ONCE(s_aiz_join_attempted) {
++    load_aiz_art();
+     if(!s_aiz_art_ready)return 0;
+     size_t used=0;
+     if(art_kos(g_rom+S3_ART_BANK+0x1ABC40,0x3990,s_aiz_join_map[0].chunks,0x8000,&used)!=0x8000 ||
+@@ -30,13 +30,14 @@ static int aiz_join_load(void)
+             if(a && (a<0x8088 || a>0x9000u-(n?153u:97u)))return 0;
+         }
+     }
+-    return s_aiz_join_ready=1;
++    s_aiz_join_ready=1;
++    }
++    return s_aiz_join_ready;
+ }
+ 
+ static int aiz_ship_art_load(void)
+ {
+-    if(s_aiz_ship_art_attempted)return s_aiz_ship_art_ready;
+-    s_aiz_ship_art_attempted=1;
++    ROWS_ONCE(s_aiz_ship_art_attempted) {
+     if(!aiz_join_load())return 0;
+     s_aiz_ship_art=s_aiz_join_second;
+     size_t used=0;
+@@ -54,7 +55,9 @@ static int aiz_ship_art_load(void)
+     for(unsigned i=0;i<5;++i)
+         memcpy(s_aiz_ship_art.video.vram+first[i]*32,
+                g_rom+S3_ART_BANK+source[i],count[i]*32);
+-    return s_aiz_ship_art_ready=1;
++    s_aiz_ship_art_ready=1;
++    }
++    return s_aiz_ship_art_ready;
+ }
+ 
+ static int aiz_cached_tree_sample(int wx,int wy,uint16_t *attr,uint8_t *pixel)
+diff --git a/game/common/sonic3_lbz_preview.inc b/game/common/sonic3_lbz_preview.inc
+index 24accdc..49dcab3 100644
+--- a/game/common/sonic3_lbz_preview.inc
++++ b/game/common/sonic3_lbz_preview.inc
+@@ -11,8 +11,7 @@ static struct {
+ 
+ static int lbz_preview_load(void)
+ {
+-    if(s_lbz_preview.attempted)return s_lbz_preview.ready;
+-    s_lbz_preview.attempted=1;
++    ROWS_ONCE(s_lbz_preview.attempted) {
+     size_t used=0;
+     if(art_kos(g_rom+S3_ART_BANK+0x1EAF04,0x24D0,s_lbz_preview.world,0x8000,&used)!=0x8000 ||
+        art_kos(g_rom+S3_ART_BANK+0x1DEA8C,0x540,s_lbz_preview.world+0x9000,0x6B8,&used)!=0x6B8 ||
+@@ -28,7 +27,9 @@ static int lbz_preview_load(void)
+     unsigned palette=0xA92FC;
+ #endif
+     for(unsigned i=0;i<48;++i)s_lbz_preview.colors[i]=scene_read16(palette+i*2);
+-    return s_lbz_preview.ready=1;
++    s_lbz_preview.ready=1;
++    }
++    return s_lbz_preview.ready;
+ }
+ 
+ /* This arena's future viewport is wholly above the water deformation.
+diff --git a/game/common/sonic3_lbz_rocket.inc b/game/common/sonic3_lbz_rocket.inc
+index 15ba23a..ca6572f 100644
+--- a/game/common/sonic3_lbz_rocket.inc
++++ b/game/common/sonic3_lbz_rocket.inc
+@@ -7,13 +7,15 @@ static struct {
+ } s_lbz_rocket;
+ static int lbz_rocket_load(void)
+ {
+-    if(s_lbz_rocket.attempted)return s_lbz_rocket.ready;
+-    s_lbz_rocket.attempted=1;size_t used=0;
++    ROWS_ONCE(s_lbz_rocket.attempted) {
++    size_t used=0;
+     if(art_kos(g_rom+S3_ART_BANK+0x1ED3D4,0xCF0,s_lbz_rocket.world,0x8000,&used)!=0x7C00 ||
+        art_kos(g_rom+S3_ART_BANK+0x1E69B0,0xE20,s_lbz_rocket.world+0x9000,0x1610,&used)!=0x1610 ||
+        art_kosm(S3_ART_BANK+0x1E8F72,0x1F92,s_lbz_rocket.video.vram,0x64A0)!=0x64A0 ||
+        art_kosm(S3_ART_BANK+0x17F6EE,0x112,s_lbz_rocket.video.vram+0xB400,0x200)!=0x200)return 0;
+     memcpy(s_lbz_rocket.world+0x8000,g_rom+S3_ART_BANK+0x8A6FE,0xF28);
+     s_lbz_rocket.world[0xEEAF]=0x7C;
+-    return s_lbz_rocket.ready=1;
++    s_lbz_rocket.ready=1;
++    }
++    return s_lbz_rocket.ready;
+ }
+diff --git a/game/common/sonic3_rewind.inc b/game/common/sonic3_rewind.inc
+index a71fe22..62ac855 100644
+--- a/game/common/sonic3_rewind.inc
++++ b/game/common/sonic3_rewind.inc
+@@ -114,6 +114,6 @@ static int presentation_state_load(const void *src,size_t size,int apply)
+     if(!src)return 0;
+     S3StateIO io={(uint8_t*)src,size,0,1,1};rewind_presentation_state(&io);
+     if(!io.ok || io.pos!=size)return 0;
+-    if(apply){io.pos=0;io.mode=2;rewind_presentation_state(&io);}
++    if(apply){rows_drop();io.pos=0;io.mode=2;rewind_presentation_state(&io);}
+     return io.ok && io.pos==size;
+ }
+diff --git a/game/common/sonic3_video.c b/game/common/sonic3_video.c
+index 440fb77..8c10194 100644
+--- a/game/common/sonic3_video.c
++++ b/game/common/sonic3_video.c
+@@ -15,6 +15,38 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
++#include <stddef.h>
++#include <pthread.h>
++#include <stdatomic.h>
++/* Deferred row rendering (rows_try_defer). A row job runs after its raster
++ * time, possibly on a worker thread, while other rows run concurrently.
++ *  - ROWS_SERIAL: code that keeps static scratch runs under one lock.
++ *  - ROWS_ONCE(flag) { decode } : a lazily decoded cache. The first caller
++ *    decodes under a lock and `flag` is published (release) only when the
++ *    block exits, so a concurrent row never reads a half-decoded cache.
++ *    Outside a job it is the original "if(!flag){flag=1;...}". */
++static _Thread_local int s_rows_in_job,s_rows_lazy_depth;
++static pthread_mutex_t s_rows_serial=PTHREAD_MUTEX_INITIALIZER;
++static pthread_mutex_t s_rows_lazy=PTHREAD_MUTEX_INITIALIZER;
++#define ROWS_SERIAL(stmt) do { if(s_rows_in_job){pthread_mutex_lock(&s_rows_serial);stmt;pthread_mutex_unlock(&s_rows_serial);} \
++                               else {stmt;} } while(0)
++typedef struct { int *flag;int locked,run; } RowsOnce;
++static RowsOnce rows_once_enter(int *flag)
++{
++    RowsOnce o={NULL,0,0};
++    if(__atomic_load_n(flag,__ATOMIC_ACQUIRE))return o;
++    if(s_rows_in_job && s_rows_lazy_depth++==0){pthread_mutex_lock(&s_rows_lazy);}
++    o.locked=s_rows_in_job;
++    if(!__atomic_load_n(flag,__ATOMIC_ACQUIRE)){o.flag=flag;o.run=1;}
++    return o;
++}
++static void rows_once_exit(RowsOnce *o)
++{
++    if(o->flag)__atomic_store_n(o->flag,1,__ATOMIC_RELEASE);
++    if(o->locked && --s_rows_lazy_depth==0)pthread_mutex_unlock(&s_rows_lazy);
++}
++#define ROWS_ONCE(flag) for(RowsOnce rows_once __attribute__((cleanup(rows_once_exit)))=rows_once_enter(&(flag)); \
++                            rows_once.run;rows_once.run=0)
+ #include "sonic3_knuckles_preview.inc"
+ 
+ /* The standalone S3 cartridge has the same object/layout formats, with a
+@@ -157,6 +189,10 @@ static RenderContext *s_render=&s_real_context;
+ #define s_video_frame (s_render->video)
+ #define s_world_frame (s_render->world)
+ #define s_background_frame (s_render->background)
++/* A deferred row reads the line-0 world snapshot, which is what the raster
++ * saw: nothing the renderer reads from RAM changes during active display
++ * (checked per read against the snapshot over the regression inputs). */
++#define g_ram (s_rows_in_job?s_world_frame:g_ram)
+ #define s_frame_level (s_render->level)
+ #define s_frame_special (s_render->special)
+ #define s_frame_bonus (s_render->bonus)
+@@ -231,8 +267,8 @@ enum { HCZ1_SECONDARY_TILE=0x11B, HCZ1_STATIC_TERRAIN_TILE=0x330 };
+ static uint8_t s_hcz1_secondary_tiles[0x4760];
+ static int hcz1_secondary_tiles_ready(void)
+ {
+-    static int loaded;
+-    if(!loaded)
++    static int loaded,attempted;
++    ROWS_ONCE(attempted)
+         loaded=art_kosm(S3_ART_BANK+0x1BAE7A,0x2252,s_hcz1_secondary_tiles,
+             sizeof s_hcz1_secondary_tiles)==sizeof s_hcz1_secondary_tiles?1:-1;
+     return loaded>0;
+@@ -250,8 +286,7 @@ static struct {
+ static uint8_t s_mhz_custom_patterns[0x10000]; /* current row context scratch */
+ static int mhz_custom_load(void)
+ {
+-    if(s_mhz_custom.attempted)return s_mhz_custom.ready;
+-    s_mhz_custom.attempted=1;
++    ROWS_ONCE(s_mhz_custom.attempted) {
+     size_t used=0;
+     s_mhz_custom.chunks_size=art_kos(g_rom+0x1A30E8,0x480,
+         s_mhz_custom.chunks,sizeof s_mhz_custom.chunks,&used);
+@@ -260,7 +295,9 @@ static int mhz_custom_load(void)
+     if(s_mhz_custom.chunks_size!=sizeof s_mhz_custom.chunks ||
+        s_mhz_custom.blocks_size!=sizeof s_mhz_custom.blocks ||
+        art_kosm(0x1A1EB6,0x1232,s_mhz_custom.tiles,sizeof s_mhz_custom.tiles)!=sizeof s_mhz_custom.tiles)return 0;
+-    return s_mhz_custom.ready=1;
++    s_mhz_custom.ready=1;
++    }
++    return s_mhz_custom.ready;
+ }
+ static int mhz_custom_pending(const uint8_t *ram)
+ {
+@@ -292,8 +329,7 @@ static void mhz_custom_world(uint8_t *ram){(void)ram;}
+ #endif
+ static void load_aiz_art(void)
+ {
+-    if(s_aiz_art_attempted)return;
+-    s_aiz_art_attempted=1;
++    ROWS_ONCE(s_aiz_art_attempted) {
+     size_t used=0;
+     if(art_kos(g_rom+S3_ART_BANK+0x1A374A,0x200,s_aiz_intro.blocks,0x268,&used)!=0x268 ||
+        art_kos(g_rom+S3_ART_BANK+0x1A394A,0xC40,s_aiz_intro.blocks+0x268,0x1058,&used)!=0x1058 ||
+@@ -308,6 +344,7 @@ static void load_aiz_art(void)
+         s_aiz_main.colors[i]=(uint16_t)((g_rom[S3_PAL_FOREST+i*2]<<8)|g_rom[S3_PAL_FOREST+i*2+1]);
+     }
+     s_aiz_art_ready=1;
++    }
+ }
+ 
+ static uint16_t ram16(unsigned a)
+@@ -888,7 +925,9 @@ static uint8_t scene_read8(unsigned a)
+ {
+     a &= 0xFFFFFFu;
+     if (a < 0x400000u) return g_rom[a];
+-    if (a >= 0xFF0000u) return g_ram[a & 65535u];
++    if (a >= 0xFF0000u) {
++        return g_ram[a & 65535u];
++    }
+     /* the opt-in expansion bank (game-added zones keep their layouts there) */
+     return g_rom_ext && a - 0x400000u < g_rom_ext_size ? g_rom_ext[a - 0x400000u] : 0;
+ }
+@@ -1961,8 +2000,9 @@ int s3_video_hook(uint32_t pc)
+ 
+ #include "sonic3_blue_spheres.inc"
+ 
+-static uint8_t *s_priority;
+-static int s_priority_capacity;
++/* Per-thread: rows may be drawn concurrently by the row workers. */
++static _Thread_local uint8_t *s_priority;
++static _Thread_local int s_priority_capacity;
+ static S3VideoActorOverlay s_actor_overlay;
+ static int s_actor_interpolation_blocked;
+ void s3_video_set_actor_interpolation_blocked(int blocked) { s_actor_interpolation_blocked=blocked!=0; }
+@@ -2084,8 +2124,7 @@ static uint8_t s_aiz_wave_art[0x2B00];
+ static int s_aiz_wave_art_ready,s_aiz_wave_art_attempted;
+ static int load_aiz_wave_art(void)
+ {
+-    if(!s_aiz_wave_art_attempted) {
+-        s_aiz_wave_art_attempted=1;
++    ROWS_ONCE(s_aiz_wave_art_attempted) {
+         s_aiz_wave_art_ready=art_nem(g_rom+S3_ART_BANK+0x1481A0,0x540,
+             s_aiz_wave_art,sizeof s_aiz_wave_art)==sizeof s_aiz_wave_art;
+     }
+@@ -2098,14 +2137,13 @@ static uint8_t aiz_wave_pixel(unsigned tile,int x,int y)
+     return (uint8_t)((x&1)?byte&15:byte>>4);
+ }
+ static uint8_t s_aiz_plane_art[0x1100];
+-static int s_aiz_plane_art_ready;
++static int s_aiz_plane_art_ready,s_aiz_plane_art_attempted;
+ static uint8_t aiz_plane_pixel(unsigned tile,int x,int y)
+ {
+     if(tile<0x529 || tile>=0x529+sizeof s_aiz_plane_art/32)return 0;
+-    if(!s_aiz_plane_art_ready) {
+-        if(art_kosm(S3_ART_BANK+0x182624,0x7A2,s_aiz_plane_art,sizeof s_aiz_plane_art)!=sizeof s_aiz_plane_art)return 0;
+-        s_aiz_plane_art_ready=1;
+-    }
++    ROWS_ONCE(s_aiz_plane_art_attempted)
++        s_aiz_plane_art_ready=art_kosm(S3_ART_BANK+0x182624,0x7A2,s_aiz_plane_art,sizeof s_aiz_plane_art)==sizeof s_aiz_plane_art;
++    if(!s_aiz_plane_art_ready)return 0;
+     unsigned byte=s_aiz_plane_art[(tile-0x529)*32u+(unsigned)y*4u+(unsigned)x/2u];
+     return (uint8_t)((x&1)?byte&15:byte>>4);
+ }
+@@ -2116,8 +2154,7 @@ static uint8_t s_aiz_monkey_art[0x2E0];
+ static int s_aiz_monkey_ready,s_aiz_monkey_attempted;
+ static int load_aiz_monkey_art(void)
+ {
+-    if(!s_aiz_monkey_attempted) {
+-        s_aiz_monkey_attempted=1;
++    ROWS_ONCE(s_aiz_monkey_attempted) {
+         s_aiz_monkey_ready=art_kosm(S3_ART_BANK+0x16800C,0x1F2,
+             s_aiz_monkey_art,sizeof s_aiz_monkey_art)==sizeof s_aiz_monkey_art;
+     }
+@@ -2140,8 +2177,7 @@ static int turbo_art_pixel(unsigned attr,int x,int y,uint8_t *pixel)
+ {
+     unsigned tile=attr&2047u;
+     if(tile<0x500 || tile>=0x500+sizeof s_turbo_art/32)return 0;
+-    if(!s_turbo_art_attempted) {
+-        s_turbo_art_attempted=1;
++    ROWS_ONCE(s_turbo_art_attempted) {
+         s_turbo_art_ready=art_kosm(S3_ART_BANK+0x16A968,0x422,
+             s_turbo_art,sizeof s_turbo_art)==sizeof s_turbo_art;
+     }
+@@ -2176,8 +2212,7 @@ static int native_art_pixel(unsigned owner,unsigned attr,int x,int y,uint8_t *pi
+     else if(index>=HCZ_FAN_BASE_ART)return 0;
+     const NativeArt *a=&s_native_art[index];unsigned tile=attr&2047u;
+     if(tile<a->tile || tile>=a->tile+a->bytes/32)return 0;
+-    if(!s_native_art_cache[index].attempted) {
+-        s_native_art_cache[index].attempted=1;
++    ROWS_ONCE(s_native_art_cache[index].attempted) {
+         uint8_t *dst=s_native_art_cache[index].pixels;
+         size_t bytes=a->kosm?art_kosm(a->address,a->compressed,dst,a->bytes):
+             art_nem(g_rom+a->address,a->compressed,dst,a->bytes);
+@@ -2195,8 +2230,7 @@ static int mhz_mushroom_pixel(unsigned attr,int x,int y,uint8_t *pixel)
+ #ifndef SONIC3_STANDALONE
+     static struct {uint8_t pixels[0x2620];int attempted,ready;} art;
+     unsigned tile=attr&2047u;if(tile<0x347 || tile>=0x478)return 0;
+-    if(!art.attempted) {
+-        art.attempted=1;
++    ROWS_ONCE(art.attempted) {
+         art.ready=art_nem(g_rom+0x14E846,0x11B8,art.pixels,sizeof art.pixels)==sizeof art.pixels;
+     }
+     if(!art.ready)return 0;
+@@ -2219,8 +2253,7 @@ static int giant_ring_art_pixel(unsigned owner,unsigned attr,int x,int y,uint8_t
+     if(owner<SPRITE_GIANT_RING || owner>=SPRITE_GIANT_RING+12)return 0;
+     unsigned frame=owner-SPRITE_GIANT_RING,tile=attr&2047u;
+     if(tile<0x5A0 || tile>=0x5E0)return 0;
+-    if(!frames[frame].attempted) {
+-        frames[frame].attempted=1;
++    ROWS_ONCE(frames[frame].attempted) {
+         unsigned art=scene_read32(0x619B2u),table=scene_read32(0x619B6u);
+         if(art>=0x400000u || table>=0x400000u-24u)return 0;
+         unsigned entry=table+scene_read16(table+frame*2u);
+@@ -2315,8 +2348,7 @@ static int fbz_art_pixel(unsigned owner,unsigned attr,int x,int y,uint8_t *pixel
+         (tile<0x3D5?2u:3u):owner-SPRITE_FBZ_BUTTON;
+     const NativeArt *a=&s_fbz_art[index];
+     if(tile<a->tile || tile>=a->tile+a->bytes/32)return 0;
+-    if(!s_fbz_art_cache[index].attempted) {
+-        s_fbz_art_cache[index].attempted=1;
++    ROWS_ONCE(s_fbz_art_cache[index].attempted) {
+         s_fbz_art_cache[index].ready=art_kosm(a->address,a->compressed,s_fbz_art_cache[index].pixels,a->bytes)==a->bytes;
+     }
+     if(!s_fbz_art_cache[index].ready)return 0;
+@@ -3192,7 +3224,7 @@ static void render_scanline_base(const GVDP *v, int line, const uint32_t *native
+     if(!s_interpolating && s_handoff_palette_capture && line<224)
+         memcpy(s_handoff_art.colors[line],palette,sizeof palette);
+     int origin=level?s_camera-s_left:(width-nw)/2;
+-    s_native_x=origin;
++    if(!s_rows_in_job)s_native_x=origin;   /* a deferred row's value equals line 0's */
+     /* Imported stages' line-scroll profiles position the background. Clamping
+      * the expanded foreground at a level edge moves its native viewport
+      * across the canvas; sharing that changing origin with B adds a second,
+@@ -4078,19 +4110,19 @@ static void render_scanline_base(const GVDP *v, int line, const uint32_t *native
+          * scroll snapshot is retained; sampling it would slide the preview
+          * ahead of the ledge during the approach. */
+         if(s_frame_level && s_display->preview_knux)
+-            s3_knux_preview_scanline(g_rom,line,out,width,origin,
+-                s_knux_plane_camera_x,s_knux_plane_camera_y);
++            ROWS_SERIAL(s3_knux_preview_scanline(g_rom,line,out,width,origin,
++                s_knux_plane_camera_x,s_knux_plane_camera_y));
+         *hud_origin=0;
+         draw_scene_sprites(v,line,out,width,origin,palette);
+-        if(lbz_incoming)lbz_preview_sprites(v,line,out,width,origin,lbz_camera,plane_y,lbz_palette,s_priority);
+-        boss_capsule_preview_scanline(line,out,width,origin,palette);
++        if(lbz_incoming)ROWS_SERIAL(lbz_preview_sprites(v,line,out,width,origin,lbz_camera,plane_y,lbz_palette,s_priority));
++        ROWS_SERIAL(boss_capsule_preview_scanline(line,out,width,origin,palette));
+ #ifndef SONIC3_STANDALONE
+-        cnz_waiting_scanline(line,out,width,origin,palette);
++        ROWS_SERIAL(cnz_waiting_scanline(line,out,width,origin,palette));
+ #endif
+-        lbz_waiting_scanline(line,out,width,origin,palette);
++        ROWS_SERIAL(lbz_waiting_scanline(line,out,width,origin,palette));
+         if(s_actor_overlay && !s_interpolating) {
+             presentation_overlay_begin(width);
+-            s_actor_overlay(v,line,out,width,origin,palette,s_priority,s_camera,s_camera_y);
++            ROWS_SERIAL(s_actor_overlay(v,line,out,width,origin,palette,s_priority,s_camera,s_camera_y));
+             presentation_overlay_end(width);
+         }
+     } else {
+@@ -4102,6 +4134,186 @@ static void render_scanline_base(const GVDP *v, int line, const uint32_t *native
+     }
+ }
+ 
++/* ---- Deferred row rendering --------------------------------------------------
++ * A level frame's rows depend on the per-frame snapshots taken at row 0
++ * (s_video_frame, s_world_frame, s_background_frame, the selected s_display)
++ * plus each row's live CRAM/VSRAM; nothing else live is consulted on the
++ * level path, which never needs the native-row fallback. So rows 1..223 of
++ * such frames can be recorded at their raster time and drawn later, in
++ * parallel, before anything reads the frame (genesis_video_flush_deferred, called at
++ * the end of each emulated frame and before the next row 0 replaces the
++ * snapshots). The HUD digit extensions read live VRAM/RAM: they are drawn at
++ * raster time into a transparent overlay and composited afterwards, as are
++ * the adapter's overlay_scanline pixels. Output is identical to drawing each
++ * row at its raster time (verified with per-frame framebuffer hashes).
++ * GENESIS_S3_ROW_WORKERS=N selects N worker threads (0 = off). */
++enum { ROWS_MAX_W = 1024, ROWS_MAX_THREADS = 8 };
++typedef struct {
++    int line,nw,width,has_hud,post_used;
++    uint32_t *out;
++    uint16_t cram[sizeof ((GVDP*)0)->cram/2];
++    uint16_t vsram[sizeof ((GVDP*)0)->vsram/2];
++    uint8_t reg[sizeof ((GVDP*)0)->reg];
++    uint32_t hud[ROWS_MAX_W],post[ROWS_MAX_W];
++} RowJob;
++static RowJob s_row_jobs[224];
++static int s_row_count,s_rows_workers=-1,s_rows_threads;
++static unsigned short s_row_index[224];
++static pthread_mutex_t s_rows_mutex=PTHREAD_MUTEX_INITIALIZER;
++static pthread_cond_t s_rows_cond=PTHREAD_COND_INITIALIZER;
++static unsigned s_rows_gen;
++static int s_rows_total;
++static unsigned s_rows_frame;
++/* (generation << 32) | next job. A worker claims a job only for the batch
++ * it was woken for, so one that is late or preempted can never take a job
++ * of a later batch, and the caller waits only for jobs actually claimed. */
++static _Atomic uint64_t s_rows_ticket;
++static atomic_int s_rows_done;
++static GVDP s_rows_main_vdp;
++
++static void rows_config(void)
++{
++    const char *e=getenv("GENESIS_S3_ROW_WORKERS");
++#if defined(SRPS4) && SRPS4_CONSOLE
++    int n=4;   /* cores 2-5; emulation keeps core 0, audio core 1 */
++#else
++    int n=0;
++#endif
++    if(e && *e)n=atoi(e);
++    if(n<0)n=0;if(n>ROWS_MAX_THREADS)n=ROWS_MAX_THREADS;
++    s_rows_workers=n;
++    if(n)fprintf(stderr,"[s3-video] deferred rows: %d worker thread(s)\n",n);
++}
++static void rows_run(RowJob *j,GVDP *wv)
++{
++    memcpy(wv->cram,j->cram,sizeof wv->cram);
++    memcpy(wv->vsram,j->vsram,sizeof wv->vsram);
++    memcpy(wv->reg,j->reg,sizeof wv->reg);
++    if(s_priority_capacity<j->width) {
++        uint8_t *p=(uint8_t *)realloc(s_priority,(size_t)j->width);
++        if(p){s_priority=p;s_priority_capacity=j->width;}
++    }
++    int origin;
++    s_rows_in_job=1;
++    render_scanline_base(wv,j->line,NULL,j->nw,j->out,j->width,NULL,NULL,NULL,&origin);
++    s_rows_in_job=0;
++    if(j->has_hud)for(int x=0;x<j->width;++x)if(j->hud[x]>>24)j->out[x]=j->hud[x];
++    if(j->width>j->nw && s_frame_level)handoff_dip(j->out,j->width);
++    if(j->post_used)for(int x=0;x<j->width;++x)if(j->post[x]>>24)j->out[x]=j->post[x];
++}
++static void rows_work(GVDP *wv,unsigned gen,int total)
++{
++    /* Everything past VRAM; the deferred level path reads VRAM only through
++     * the s_video_frame snapshot. Per-row registers/colors come from the job. */
++    size_t tail=offsetof(GVDP,cram);
++    int copied=0;
++    for(;;) {
++        uint64_t t=atomic_load(&s_rows_ticket);
++        if((unsigned)(t>>32)!=gen || (int)(uint32_t)t>=total)break;
++        if(!atomic_compare_exchange_weak(&s_rows_ticket,&t,t+1))continue;
++        if(!copied){memcpy((char *)wv+tail,(const char *)&s_video_frame+tail,sizeof *wv-tail);copied=1;}
++        rows_run(&s_row_jobs[(uint32_t)t],wv);
++        atomic_fetch_add(&s_rows_done,1);
++    }
++}
++static void *rows_thread(void *arg)
++{
++    (void)arg;
++    GVDP *wv=(GVDP *)calloc(1,sizeof *wv);
++    unsigned seen=0;
++    for(;;) {
++        pthread_mutex_lock(&s_rows_mutex);
++        while(s_rows_gen==seen)pthread_cond_wait(&s_rows_cond,&s_rows_mutex);
++        seen=s_rows_gen;
++        int total=s_rows_total;
++        pthread_mutex_unlock(&s_rows_mutex);
++        if(wv)rows_work(wv,seen,total);
++    }
++    return NULL;
++}
++static void rows_drop(void)
++{
++    for(int i=0;i<s_row_count;++i)s_row_index[s_row_jobs[i].line]=0;
++    s_row_count=0;
++}
++static void rows_flush(void)
++{
++    int n=s_row_count;
++    if(!n)return;
++    while(s_rows_threads<s_rows_workers) {
++        pthread_t t;pthread_attr_t attr;
++        pthread_attr_init(&attr);
++        pthread_attr_setstacksize(&attr,1u<<20);   /* console default stacks are small */
++        int r=pthread_create(&t,&attr,rows_thread,NULL);
++        pthread_attr_destroy(&attr);
++        if(r!=0){s_rows_workers=s_rows_threads;break;}
++        pthread_detach(t);++s_rows_threads;
++    }
++    atomic_store(&s_rows_done,0);
++    pthread_mutex_lock(&s_rows_mutex);
++    unsigned gen=++s_rows_gen;
++    s_rows_total=n;
++    atomic_store(&s_rows_ticket,(uint64_t)gen<<32);
++    if(s_rows_threads)pthread_cond_broadcast(&s_rows_cond);
++    pthread_mutex_unlock(&s_rows_mutex);
++    rows_work(&s_rows_main_vdp,gen,n);
++    while(atomic_load(&s_rows_done)<n){}
++    rows_drop();
++}
++void genesis_video_flush_deferred(void) { rows_flush(); }
++
++static int rows_try_defer(const GVDP *v,int line,int nw,uint32_t *out,int width,
++                          const GVDPRasterRow *raster)
++{
++    if(s_rows_workers<0)rows_config();
++    if(line==0 && s_row_count)rows_flush();   /* row 0 replaces the snapshots */
++    if(line==0 && s_rows_workers) {
++        /* Coverage in the log: rows drawn off the emulation thread. */
++        static unsigned frames,rows;
++        rows+=s_rows_frame;s_rows_frame=0;
++        if(++frames==600) {
++            fprintf(stderr,"[s3-video] deferred rows: %.1f of 224 per frame\n",rows/600.0);
++            frames=rows=0;
++        }
++    }
++    if(!s_rows_workers || line<=0 || line>=224 || raster || width<=nw || width>ROWS_MAX_W ||
++       s_row_count>=224)return 0;
++    if(s_interpolating || s_interpolation_enabled || s_mode==VIDEO_OFF)return 0;
++    if(!s_frame_level || !s_display || s_display->scene!=1 || s_frame_special ||
++       s_frame_bonus || s_frame_menu!=MENU_NONE || competition_world_ready())return 0;
++    /* The level path's native-row fallbacks read the snapshot registers. */
++    const GVDP *sv=&s_video_frame;
++    if((nw!=320 && nw!=256) || !(sv->reg[1]&64) || (sv->reg[12]&14) ||
++       s_priority_capacity<width)return 0;
++    /* A flat palette returns before the HUD origin moves to the canvas. */
++    uint32_t first=genesis_dac_cram_to_argb(presentation_cram(line,0,v->cram[0]),GENESIS_DAC_NORMAL);
++    int uniform=1;
++    for(int i=1;i<64 && uniform;++i)
++        if(genesis_dac_cram_to_argb(presentation_cram(line,i,v->cram[i]),GENESIS_DAC_NORMAL)!=first)uniform=0;
++    int origin=uniform && !(sv->reg[12]&8)?(width-nw)/2:0;
++    RowJob *j=&s_row_jobs[s_row_count];
++    j->line=line;j->nw=nw;j->width=width;j->out=out;j->post_used=0;
++    memcpy(j->cram,v->cram,sizeof j->cram);
++    memcpy(j->vsram,v->vsram,sizeof j->vsram);
++    memcpy(j->reg,v->reg,sizeof j->reg);
++    memset(j->hud,0,(size_t)width*sizeof j->hud[0]);
++    life_ones_scanline(v,g_ram,line,j->hud,width,origin);
++    time_tens_scanline(v,g_ram,line,j->hud,width,origin);
++    j->has_hud=0;
++    for(int x=0;x<width;++x)if(j->hud[x]){j->has_hud=1;break;}
++    s_row_index[line]=(unsigned short)(++s_row_count);
++    ++s_rows_frame;
++    return 1;
++}
++static uint32_t *rows_overlay_target(int line,int width)
++{
++    if(line<=0 || line>=224 || !s_row_index[line])return NULL;
++    RowJob *j=&s_row_jobs[s_row_index[line]-1];
++    if(width!=j->width)return NULL;
++    if(!j->post_used){memset(j->post,0,(size_t)width*sizeof j->post[0]);j->post_used=1;}
++    return j->post;
++}
++
+ static void render_scanline(const GVDP *v,int line,const uint32_t *native,int nw,
+                             uint32_t *out,int width,GameVideoNativeRow native_row,
+                             void *native_ctx,const GVDPRasterRow *raster)
+@@ -4121,6 +4333,7 @@ static void scanline(const GVDP *v,int line,const uint32_t *native,int nw,uint32
+ static void scanline_lazy(const GVDP *v,int line,int nw,uint32_t *out,int width,
+                           GameVideoNativeRow native_row,void *native_ctx,const GVDPRasterRow *raster)
+ {
++    if(rows_try_defer(v,line,nw,out,width,raster))return;
+     render_scanline(v,line,NULL,nw,out,width,native_row,native_ctx,raster);
+ }
+ 
+@@ -4349,12 +4562,17 @@ static void competition_card_scanline(const GVDP *v, int line, uint32_t *out, in
+ }
+ static void overlay_scanline(const struct GVDP *v, int line, uint32_t *out, int width)
+ {
++    uint32_t *deferred=rows_overlay_target(line,width);
++    if(deferred)out=deferred;   /* composited after the deferred row is drawn */
+     if(!enabled()) {
+         life_ones_scanline(v,g_ram,line,out,width,(width-320)/2);
+         time_tens_scanline(v,g_ram,line,out,width,(width-320)/2);
+     }
+     competition_card_scanline(v,line,out,width);
+     if (s_frame_overlay) s_frame_overlay(line, out, width);
++    /* Draw the deferred rows at the end of active display: vertical blank
++     * replaces sprite patterns and presentation banks the rows still read. */
++    if(line==223 && s_row_count)rows_flush();
+ }
+ 
+ /* Owned, disposable host snapshots. They never enter a save/RB stream. */
+@@ -4389,6 +4607,7 @@ static void interpolation_reset(void)
+ 
+ static void presentation_reset(void)
+ {
++    rows_drop();
+     int preserve=s_native_publication_restored;s_native_publication_restored=0;
+     interpolation_reset();
+     /* Rollback restores chips and WRAM, not host scene publications. Fade
+@@ -4719,3 +4938,4 @@ const GameVideo sonic3_video = {
+     .presentation_state_save = presentation_state_save,
+     .presentation_state_load = presentation_state_load
+ };
++
