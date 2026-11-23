@@ -2,6 +2,18 @@
 
 set(SRPS4_ROOT "${CMAKE_CURRENT_LIST_DIR}/.." CACHE INTERNAL "")
 
+# Force-include srps4_sdl_compat.h into a target's hand-written C. Recompiled
+# C never calls SDL, and a flag change there would recompile tens of MB of it.
+function(srps4_force_sdl_compat target)
+    get_target_property(_srcs ${target} SOURCES)
+    list(FILTER _srcs INCLUDE REGEX "\\.c$")
+    list(FILTER _srcs EXCLUDE REGEX "(/generated/|/gen/|_gen\\.c$|srps4_)")
+    if(_srcs)
+        set_property(SOURCE ${_srcs} TARGET_DIRECTORY ${target} APPEND PROPERTY
+            COMPILE_OPTIONS -include "${SRPS4_ROOT}/src/srps4_sdl_compat.h")
+    endif()
+endfunction()
+
 # srps4_add_host(<target> ENTRY <symbol>)
 #   Adds the PS4 platform layer: our own main() (which prepares /data and then
 #   calls the game's renamed desktop entry), the offline launcher stub, and the
@@ -21,6 +33,7 @@ function(srps4_add_host target)
         ${SRPS4_ROOT}/src/srps4_log.c
         ${SRPS4_ROOT}/src/srps4_time.c
         ${SRPS4_ROOT}/src/srps4_affinity.c
+        ${SRPS4_ROOT}/src/srps4_mman.c
         ${SRPS4_ROOT}/src/srps4_ucontext.c
         ${SRPS4_ROOT}/src/srps4_ucontext.S)
 
@@ -38,6 +51,17 @@ function(srps4_add_host target)
     if(SRPS4_TARGET_PS4)
         # musl's (Linux) clock ids -> libkernel's (FreeBSD); see srps4_time.c.
         target_link_options(${target} PRIVATE "LINKER:--wrap=clock_gettime")
+        # ...and mmap flags / sysconf names (srps4_mman.c).
+        target_link_options(${target} PRIVATE "LINKER:--wrap=mmap" "LINKER:--wrap=sysconf")
+        # SDL 2.0.22+ calls the title may make against PacBrew's SDL 2.0.18
+        # (srps4_sdl_compat.c), declared through a force-included header.
+        target_sources(${target} PRIVATE ${SRPS4_ROOT}/src/srps4_sdl_compat.c)
+        target_link_options(${target} PRIVATE "LINKER:--wrap=SDL_CreateRenderer")
+        # Deferred to the end of configuration: titles may still add sources
+        # after this call (segagenesisrecomp reconciles its runner list in a
+        # deferred step of its own).
+        cmake_language(EVAL CODE
+            "cmake_language(DEFER CALL srps4_force_sdl_compat [[${target}]])")
     endif()
     if(NOT SRPS4_TARGET_PS4)
         # glibc's fortified __fprintf_chk & co. would bypass the wraps.

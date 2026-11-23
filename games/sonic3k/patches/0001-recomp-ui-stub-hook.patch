@@ -1,0 +1,19 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index d1578e6..6d33d41 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -494,7 +494,13 @@ endforeach()
+ # it per mode via g_game_spec.boxart -> assets/img/boxart-<mode>.tga. Defines
+ # RECOMP_LAUNCHER.
+ set(RECOMP_UI_ENABLE_MODS ON CACHE BOOL "Expose Sonic 3 family's opt-in built-in mods")
+-include(${CMAKE_SOURCE_DIR}/recomp-ui/recomp_ui.cmake)
++if(SRPS4_RECOMP_UI_CMAKE)
++    # snesrecomp-ps4: the ImGui launcher needs a run-time shader compiler that
++    # retail PS4 firmware lacks; the console build boots straight into the game.
++    include(${SRPS4_RECOMP_UI_CMAKE})
++else()
++    include(${CMAKE_SOURCE_DIR}/recomp-ui/recomp_ui.cmake)
++endif()
+ recomp_target_launcher_ui(Sonic3Recomp
+     CONSOLE genesis
+     BOXART ${CMAKE_SOURCE_DIR}/boxart-sonic3.tga  BOXART_NAME boxart-sonic3.tga)

@@ -1,0 +1,78 @@
+diff --git a/runner/main.c b/runner/main.c
+index 6653125..771c5aa 100644
+--- a/runner/main.c
++++ b/runner/main.c
+@@ -2487,6 +2487,11 @@ int main(int argc, char *argv[])
+     cmd_server_owner_review_init(getenv("GENESIS_OWNER_REVIEW"));
+     init_exe_dir(argv[0]);
+     const char *user_dir=getenv("GENESIS_USER_DIR");
++#if defined(SRPS4)
++    /* snesrecomp-ps4: /app0 is read-only; the port's entry point provisions
++     * /data/<Title> and names it here. */
++    if(!user_dir || !*user_dir) user_dir=getenv("SRPS4_DATA_DIR");
++#endif
+     if(user_dir && *user_dir) {
+         if(!path_is_absolute(user_dir) || strlen(user_dir)>sizeof s_data_dir-2) {
+             fprintf(stderr,"GENESIS_USER_DIR must be an absolute directory path\n");return 1;
+@@ -3073,6 +3078,14 @@ int main(int argc, char *argv[])
+         if (g_app_config.fullscreen == 2)      win_flags |= SDL_WINDOW_FULLSCREEN;
+         else if (g_app_config.fullscreen == 1) win_flags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
+     }
++#if defined(SRPS4) && SRPS4_CONSOLE
++    /* snesrecomp-ps4: PacBrew's SDL creates the Piglet EGL surface once, at
++     * the window's size. Match the 1080p video-out buffer as its own apps do;
++     * the frame scales to it through SDL_RenderSetLogicalSize. */
++    win_w = 1920; win_h = 1080;
++    win_flags &= ~(Uint32)(SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI |
++                           SDL_WINDOW_FULLSCREEN | SDL_WINDOW_FULLSCREEN_DESKTOP);
++#endif
+     SDL_Window *window = SDL_CreateWindow(
+         window_title,
+         SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+@@ -3112,6 +3125,14 @@ int main(int argc, char *argv[])
+     if (!renderer) {
+         renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
+     }
++#if defined(SRPS4) && SRPS4_CONSOLE
++    /* No launcher to change the setting from: degrade to SDL's software
++     * renderer rather than exit if Piglet/GLES2 cannot come up. */
++    if (!renderer) {
++        fprintf(stderr, "[VIDEO] accelerated renderer failed (%s); using software\n", SDL_GetError());
++        renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_SOFTWARE);
++    }
++#endif
+     if (!renderer) {
+         fprintf(stderr, "SDL_CreateRenderer: %s\n", SDL_GetError());
+         return 1;
+@@ -3317,7 +3338,16 @@ int main(int argc, char *argv[])
+     /* --target-fps wins over debug.ini, which wins over default 59.94. */
+     double target_fps = (target_fps_cli > 0.0)     ? target_fps_cli :
+                         (target_fps_from_ini > 0.0) ? target_fps_from_ini :
++#if defined(SRPS4) && SRPS4_CONSOLE
++                        /* The console's output is a fixed 60.00 Hz with
++                         * vsync: pace to it, or the 0.1% NTSC shortfall
++                         * leaves one vblank without a new picture every
++                         * ~17 s (a visible hitch). Audio DRC absorbs the
++                         * 0.1% rate difference. */
++                                                       60.0;
++#else
+                                                        (60000.0 / 1001.0);  /* NTSC */
++#endif
+     fprintf(stderr, "[pacer] target frame rate: %.4f fps\n", target_fps);
+     int debug_port = debug_port_cli ? debug_port_cli :
+                      (debug_port_from_ini ? debug_port_from_ini :
+diff --git a/runner/video/genesis_hd_gpu.c b/runner/video/genesis_hd_gpu.c
+index 1530cfd..1ffff96 100644
+--- a/runner/video/genesis_hd_gpu.c
++++ b/runner/video/genesis_hd_gpu.c
+@@ -32,7 +32,9 @@ SDL_Renderer *genesis_hd_create_renderer(SDL_Window *window,unsigned flags,unsig
+     free(saved);return renderer;
+ }
+ 
+-#if !defined(__EMSCRIPTEN__) && !defined(__ANDROID__)
++/* snesrecomp-ps4: the console's GLES2 (Piglet) has no run-time shader
++ * compiler, so the desktop-GL upscaler is compiled out like on Android. */
++#if !defined(__EMSCRIPTEN__) && !defined(__ANDROID__) && !(defined(SRPS4) && SRPS4_CONSOLE)
+ #include <SDL2/SDL_opengl.h>
+ #include "../png_write.h"
+ #define HD_TEX_WIDTH 1024u

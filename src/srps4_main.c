@@ -256,6 +256,11 @@ int SRPS4_MAIN(int argc, char **argv) {
 
   /* The console has no keyboard or launcher; boot straight into the game. */
   setenv("SNESRECOMP_NO_LAUNCHER", "1", 1);
+  setenv("GENESIS_NO_LAUNCHER", "1", 1);
+  /* Hosts that take their writable directory from the environment
+   * (segagenesisrecomp: GENESIS_USER_DIR via the framework patch) read it
+   * here; snesrecomp hosts use the executable-directory convention. */
+  setenv("SRPS4_DATA_DIR", s_data_dir, 1);
   /* Diagnostics recording is for desktop bug reports; on a console it would
    * only spend the hard drive and frame time. */
   setenv("MMX_REPLAY_RECORD", "0", 1);
@@ -284,8 +289,10 @@ int SRPS4_MAIN(int argc, char **argv) {
   static char rom_path[600];
   snprintf(rom_path, sizeof(rom_path), "%s/%s", s_data_dir, SRPS4_ROM_NAME);
   if (file_exists(rom_path) && n < 62) {
-    fake_argv[n++] = "--rom";
-    fake_argv[n++] = rom_path;
+#if !(defined(SRPS4_ROM_POSITIONAL) && SRPS4_ROM_POSITIONAL)
+    fake_argv[n++] = "--rom";          /* snesrecomp hosts */
+#endif
+    fake_argv[n++] = rom_path;         /* Genesis hosts take it positionally */
   }
 #endif
   fake_argv[n] = NULL;
